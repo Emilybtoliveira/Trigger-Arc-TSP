@@ -10,4 +10,4 @@ end
 instance_filepath = ARGS[1]
 instance_module::InstanceModule.Instance = InstanceModule.Instance(instance_filepath)
 
-println("Number of nodes: ", instance_module.num_nodes)
+println("Graph matrix: ", instance_module.graph)
