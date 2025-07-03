@@ -28,7 +28,7 @@
 using ArgParse
 using Random
 using Parameters
-
+using Dates
 #--------------------------------------------------------
 
 const IntType   = Int64
@@ -38,6 +38,33 @@ const MinInt	= typemin(IntType)
 const FloatType = Float64
 const MaxFloat	= typemax(FloatType)
 const MinFloat	= typemin(FloatType)
+
+const SolutionType = Vector{IntType}
+
+# Global variable to allow printing 
+verbose_mode = false
+
+maximum_number_of_nodes_to_print = 15
+
+function PrintHeader(msg::String)
+	 msgsize=sizeof(msg)
+	 targetsize = 80
+	 println()
+	 if (msgsize >= targetsize)
+	    println(msg)
+	 else
+	    s1 = div(targetsize - msgsize-2,2)
+	    s2 = targetsize - msgsize - s1 - 2
+	    for i in 1:s1
+	    	print("-")
+	    end
+	    print(" ",msg," ",)
+	    for i in 1:s2
+	    	print("-")
+	    end
+	    println()
+	 end
+end
 
 # ===========================================
 mutable struct NodeType
@@ -85,21 +112,6 @@ mutable struct TriggerType
 	     	 end
 end
 
-# # ===========================================
-# mutable struct SolutionType
-# 	SolName::String         # Name of the method used to obtain the solution
-# 	SolArc::Vector{IntType} # Solution is a sequence of arc indexes.
-# 				# No. of arcs in SolArc is given by the vector size
-# 	function SolutionType()
-# 		 SolutionType("", MaxFloat, IntType[])
-# 	end
-# 	function SolutionType(  _SolName::String,
-# 				_SolValue::FloatType,
-# 				_SolArc::Vector{IntType})
-# 		 new(_SolNArcs,_SolValue,_SolArc)
-# 	end
-# end
-
 # ===========================================
 mutable struct TriggerArcTSP
 	# Info about the input
@@ -133,7 +145,7 @@ mutable struct TriggerArcTSP
 	time_ub_rlxlag::IntType   # Time used to compute UB by Lagran. Relax.
 	time_ub_colgen::IntType   # Time used to compute UB via LP column gener.
 
-	time_ilp::IntType   	  # time used to compute LB/UB by exact Branch and Cut
+	time_ilp::FloatType   	  # time used to compute LB/UB by exact Branch and Cut
 
 	# Output info: computed lower bounds
 	lb_lp::FloatType     # LB by LP (may use cutt. planes)
@@ -159,6 +171,9 @@ mutable struct TriggerArcTSP
 	# User information
 	ra::IntType
 
+	# Log filename
+	logfilename::String
+
 	# ============================================================================
 	# Ordem dos campos:
 	# NNodes,	  NArcs,	      NTriggers,
@@ -171,7 +186,7 @@ mutable struct TriggerArcTSP
 	# lb_lp,      	  lb_rlxlag, 	      lb_colgen, 	  lb_ilp,
 	# ub_lp, 	  ub_rlxlag, 	      ub_colgen, 	  ub_ilp
 	# ub_lp_arcs,     ub_rlxlag_arcs,     ub_colgen_arcs,	  ub_ilp_arcs
-	# nn_ilp,	  ra
+	# nn_ilp,	  ra,		      logfilename
 		 
 	# ============================================================================
 	# Constructors
@@ -216,7 +231,8 @@ mutable struct TriggerArcTSP
 		 Vector{IntType}(), # set of arcs in the ub_ilp     solution starts by an empty vector.
 		 
 		 0,		# default for nn_ilp, the number of branch and bound/cut tree
-		 999999)	# academic number
+		 999999,	# academic number
+		 "")		# logfilename
 	end
 		 
 	function TriggerArcTSP( _inputfilename::String,
@@ -229,7 +245,8 @@ mutable struct TriggerArcTSP
 				_maxtime_ub_colgen::IntType,
 				_maxtime_ub_rlxlag::IntType,
 			 	_maxtime_ilp::IntType,
-				_ra::IntType)
+				_ra::IntType,
+				_logfilename)
 		 fp=open(_inputfilename,"r")
 		 header = readline(fp)
 		 sNNodes,sNArcs,sNTriggers = split(header," ")
@@ -323,11 +340,11 @@ mutable struct TriggerArcTSP
 		     _ub_ilp_arcs[i]    = -1
 		 end
 		 
-		 new(	_NNodes,_NArcs,_NTriggers,
-			_Node,_Arc,_Trigger,
-			_inputfilename,_seednumber,
-			_maxtime_lb_lp,_maxtime_lb_rlxlag,_maxtime_lb_colgen,
-			_maxtime_ub_lp,_maxtime_ub_rlxlag,_maxtime_ub_colgen,_maxtime_ilp,
+		 new(_NNodes,_NArcs,_NTriggers,
+		     _Node,_Arc,_Trigger,
+		     _inputfilename,_seednumber,
+		     _maxtime_lb_lp,_maxtime_lb_rlxlag,_maxtime_lb_colgen,
+		     _maxtime_ub_lp,_maxtime_ub_rlxlag,_maxtime_ub_colgen,_maxtime_ilp,
 			
 		 	0, 		# default for time_lb_lp
 		 	0,		# default for time_lb_rlxlag
@@ -354,7 +371,8 @@ mutable struct TriggerArcTSP
 			_ub_ilp_arcs,
 
 			0,		# default for nn_ilp
-			_ra)		# academic number
+			_ra,		# academic number
+			_logfilename)   # logfilename
 	end
 end
 
@@ -383,6 +401,22 @@ function write_instance(T::TriggerArcTSP, outputfilename::String)
 	 close(fp)
 end
 
+	 # # O trecho abaixo foi usado apenas para verificar a rotina acima.
+	 # # O proximo trecho permite verificar se o arquivo lido esta armazenado
+	 # # corretamente. O trecho escreve os dados para um novo arquivo e
+	 # # compara com diff.
+	 # # Write the instance again to a text file, so that we can compare with diff
+	 # # The next lines are valid only if the corresponding parts of the inputfile
+	 # # corresponding to arcs and triggers are given in the order of arc and 
+	 # # trigger id's. (there are some instances that do not follow the id's order)
+	 # outputfilename=inputfilename*"_copy"
+	 # write_instance(T,outputfilename)
+	 # if (isfile(inputfilename)) &&  (isfile(outputfilename)) 
+	 #    output=read(`diff --brief -s $inputfilename $outputfilename`, String)
+   	 #    println(output)
+	 # end
+
+
 function print_instance(T::TriggerArcTSP)
 	 
 	 # Print the header
@@ -406,16 +440,60 @@ function print_instance(T::TriggerArcTSP)
 	 end
 end
 
+function Build_In_Out_Arcs(T::TriggerArcTSP)
+	 # InArcs is a vector of vectors.
+	 # InArcs[v] is a vector, st., each element is the index of an arc entering v
+	 # OutArcs is similar to InArcs, but with indexes of arcs leaving v
+	 InArcs = Vector{Vector{IntType}}(undef,T.NNodes)
+	 OutArcs = Vector{Vector{IntType}}(undef,T.NNodes)
+	 
+	 # Starts the set of arcs entering and leaving as empty sets
+	 for v in 1:T.NNodes
+	     InArcs[v] = IntType[] # empty vector
+	     OutArcs[v] = IntType[] # empty vector
+	 end
+	 
+	 # For each arc 'a=(u,v)', include 'a' in the OutArcs[u] and InArcs[v]
+	 for a in 1:T.NArcs
+	     append!(InArcs[T.Arc[a].v], a)
+	     append!(OutArcs[T.Arc[a].u],a)
+	 end
+
+	 return(InArcs,OutArcs)
+end
+
+# After building the InArcs and OutArcs with the previou routine, you can
+# print them with the Print_Incident_Arcs routine.
+# Example: Print_Incident_Arcs(T,InArcs,"InArc")
+#
+function Print_Incident_Arcs(T::TriggerArcTSP,IncidentArcs::Vector{Vector{IntType}},ListName::String)
+	 if (T.NNodes > maximum_number_of_nodes_to_print)
+	    println("Verbose mode: List of incident arcs printed only for graphs up to ",maximum_number_of_nodes_to_print," nodes.")
+	    return
+	 end
+	 PrintHeader(ListName)
+	 for v in 1:T.NNodes
+	     print("[",v,"]: ")
+	     for a in IncidentArcs[v]
+	    	 print("(",T.Arc[a].u," , ",T.Arc[a].v,") ")
+	     end
+	     println()
+	 end
+end
+	 
 
 
 function parse_commandline()
     s = ArgParseSettings()
     @add_arg_table s begin
-        "--inputfilename"
+        "--verbose", "-v"
+            help = "prints more information during execution"
+            action = :store_true
+        "--inputfilename", "-f"
             help = "filename of the input instance"
 	    arg_type = String
 	    required = true
-        "--seednumber"
+        "--seednumber", "-s"
             help = "seed for the random number generator"
 	    arg_type = Int
 	    required = false
@@ -455,17 +533,24 @@ function parse_commandline()
             arg_type = Int
 	    required = false
 	    default =  MaxInt
-        "--ra"
+        "--ra", "-r"
             help = "academic number"
 	    arg_type = Int
 	    required = false
 	    default =  999999
+        "--logfile", "-l"
+            help = "log file with time and solution values"
+	    arg_type = String
+	    required = false
+	    default =  "trigger_arc_tsp.log"
     end
     return parse_args(s)
 end
 
 function getparameters()
+    global verbose_mode
     inputfilename=""
+    logfilename=""
     seednumber=1
     maxtime_lb_lp=MaxInt
     maxtime_lb_rlxlag=MaxInt
@@ -486,6 +571,16 @@ function getparameters()
 	   inputfilename="$val"
 	   if (!isfile(inputfilename))
 	      error("Could not find file "*inputfilename)
+	   end
+	end
+	if "$arg"=="logfile"
+	   logfilename="$val"
+	end
+	if "$arg"=="verbose"
+	   if "$val"=="true"
+	      verbose_mode = true
+	   else
+	      verbose_mode = false
 	   end
 	end
 	if "$arg"=="ra"
@@ -538,6 +633,24 @@ function getparameters()
 	end
     end
 
+    if (verbose_mode)
+       println()
+       PrintHeader("Command line parameters")
+       println("inputfilename =      ",inputfilename)
+       println("seednumber =         ",seednumber)
+       println("maxtime_lb_lp =      ",maxtime_lb_lp)
+       println("maxtime_lb_rlxlag =  ",maxtime_lb_rlxlag)
+       println("maxtime_lb_colgen =  ",maxtime_lb_colgen)
+       println("maxtime_ub_lp =      ",maxtime_ub_lp)
+       println("maxtime_ub_rlxlag =  ",maxtime_ub_rlxlag)
+       println("maxtime_ub_colgen =  ",maxtime_ub_colgen)
+       println("maxtime_ilp =        ",maxtime_ilp,)
+       println("ra =                 ",ra)
+       println("verbose_mode =       ",verbose_mode)
+       println("logfilename =        ",logfilename)
+       println()
+    end
+
     return(inputfilename,	# input file 
 	 seednumber,		# Randomized steps become deterministic for fixed seed
 	 maxtime_lb_lp,		# Max. time to compute LB via LP (may use cutting planes)
@@ -547,8 +660,112 @@ function getparameters()
 	 maxtime_ub_rlxlag,	# Max. time to compute UB via Lagrangean Relaxation
 	 maxtime_ub_colgen,	# Max. time to compute UB via LP column generation
 	 maxtime_ilp,		# Max. time to compute LB and UB via exact Branch and Cut
-	 ra)			# Academic Number
+	 ra,			# Academic Number
+	 logfilename)           # Log filename
 end
 
 
+
+function WriteLogFile(T::TriggerArcTSP,routine::String)
+
+	if (!isfile(T.logfilename))
+	   fp=open(T.logfilename,"a")
+	   # write the header
+	   print(fp,"RA, InputFile, Path, Dia/Hora, ")
+	   println(fp,"NNodes, NArcs, NTriggers, Routine, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10")
+	else
+	   fp=open(T.logfilename,"a")
+	end
+
+	# The first columns are common for all 
+	now = Dates.now()
+	print(fp,T.ra,",",basename(T.inputfilename),",",T.inputfilename,",",now,",")
+	print(fp,T.NNodes,",",T.NArcs,",",T.NTriggers,",",routine,",")
+
+	if (routine=="lb_lp")
+		print(fp,"maxtime_lb_lp,",T.maxtime_lb_lp,",")
+	 	print(fp,"time_lb_lp,",T.time_lb_lp,",")
+	 	print(fp,"lb_lp,",T.lb_lp,",")
+		println(fp)
+	elseif (routine=="lb_rlxlag")
+		print(fp,"maxtime_lb_rlxlag,",T.maxtime_lb_rlxlag,",")
+		print(fp,"time_lb_rlxlag,",T.time_lb_rlxlag,",")
+		print(fp,"lb_rlxlag,",T.lb_rlxlag,",")
+		println(fp)
+	elseif (routine=="lb_colgen")
+		print(fp,"maxtime_lb_colgen,",T.maxtime_lb_colgen,",")
+		print(fp,"time_lb_colgen,",T.time_lb_colgen,",")
+		print(fp,"lb_colgen,",T.lb_colgen,",")
+		println(fp)
+	elseif (routine=="ub_lp")
+	 	print(fp,"maxtime_ub_lp,",T.maxtime_ub_lp,",")
+	 	print(fp,"time_ub_lp,",T.time_ub_lp,",")
+	 	print(fp,"ub_lp,",T.ub_lp,",")
+		println(fp)
+	elseif (routine=="ub_rlxlag")
+		print(fp,"maxtime_ub_rlxlag,",T.maxtime_ub_rlxlag,",")
+		print(fp,"time_ub_rlxlag,",T.time_ub_rlxlag,",")
+		print(fp,"ub_rlxlag,",T.ub_rlxlag,",")
+		println(fp)
+	elseif (routine=="ub_colgen")
+		print(fp,"maxtime_ub_colgen,",T.maxtime_ub_colgen,",")
+		print(fp,"time_ub_colgen,",T.time_ub_colgen,",")
+		print(fp,"ub_colgen,",T.ub_colgen,",")
+		println(fp)
+	elseif (routine=="ilp")
+	 	print(fp,"maxtime_ilp,",T.maxtime_ilp,",")
+	 	print(fp,"time_ilp,",T.time_ilp,",")
+		print(fp,"lb_ilp,",T.lb_ilp,",")
+		print(fp,"ub_ilp,",T.ub_ilp,",")
+	 	print(fp,"nn_ilp,",T.nn_ilp,",")
+		println(fp)
+	else
+		error("Unknown \"",routine,"\" routine code.")
+	end
+	close(fp)
+end
+
+# function WriteLogFile(T::TriggerArcTSP)
+# 	 if (!isfile(T.logfilename))
+# 	    fp=open(T.logfilename,"a")
+# 	    # write the header
+# 	    print(fp,"RA, InputFile, Path, Dia/Hora, ")
+# 	    print(fp,"NNodes, NArcs, NTriggers, ")
+# 	    print(fp,"maxtime_lb_lp, maxtime_lb_rlxlag, maxtime_lb_colgen, ")
+# 	    print(fp,"maxtime_ub_lp, maxtime_ub_rlxlag, maxtime_ub_colgen, ")
+# 	    print(fp,"maxtime_ilp, ")
+# 	    print(fp,"time_lb_lp, time_lb_rlxlag, time_lb_colgen, ")
+# 	    print(fp,"time_ub_lp, time_ub_rlxlag, time_ub_colgen, ")
+# 	    print(fp,"time_ilp, ")
+# 	    print(fp,"lb_lp, lb_rlxlag, lb_colgen, lb_ilp, ")
+# 	    print(fp,"ub_lp, ub_rlxlag, ub_colgen, ub_ilp, ")
+# 	    println(fp,"nn_ilp")
+# 	 else
+# 	    fp=open(T.logfilename,"a")
+# 	 end
+# 	 now = Dates.now()
+# 	 print(fp,T.ra,",",basename(T.inputfilename),",",T.inputfilename,",",now,",")
+# 	 print(fp,T.NNodes,",",T.NArcs,",",T.NTriggers,",")
+# 	 print(fp,T.maxtime_lb_lp,",",T.maxtime_lb_rlxlag,",",T.maxtime_lb_colgen,",")
+# 	 print(fp,T.maxtime_ub_lp,",",T.maxtime_ub_rlxlag,",",T.maxtime_ub_colgen,",")
+# 	 print(fp,T.maxtime_ilp,",")
+# 	 print(fp,T.time_lb_lp,",",T.time_lb_rlxlag,",",T.time_lb_colgen,",")
+# 	 print(fp,T.time_ub_lp,",",T.time_ub_rlxlag,",",T.time_ub_colgen,",")
+# 	 print(fp,T.time_ilp,",")
+# 	 print(fp,T.lb_lp,",",T.lb_rlxlag,",",T.lb_colgen,",",T.lb_ilp,",")
+# 	 print(fp,T.ub_lp,",",T.ub_rlxlag,",",T.ub_colgen,",",T.ub_ilp,",")
+# 	 println(fp,T.nn_ilp)
+# 	 close(fp)
+# end
+
+function WriteLogFile(T::TriggerArcTSP)
+
+	 WriteLogFile(T,"lb_lp")
+	 WriteLogFile(T,"lb_rlxlag")
+	 WriteLogFile(T,"lb_colgen")
+	 WriteLogFile(T,"ub_lp")
+	 WriteLogFile(T,"ub_rlxlag")
+	 WriteLogFile(T,"ub_colgen")
+	 WriteLogFile(T,"ilp")
+end
 
