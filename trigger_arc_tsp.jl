@@ -94,7 +94,7 @@ function main()
 	TriggerArcTSP_ilp(T)
 	WriteLogFile(T,"ilp")
 
-	Exemplo_PLI(T,10)
+	# Exemplo_PLI(T,10)
 end
 
 
