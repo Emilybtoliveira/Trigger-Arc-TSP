@@ -12,6 +12,152 @@
 #
 using JuMP
 using Gurobi
+using DataStructures
+
+function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true)  
+    # x_a = 1 se arco a está na solução
+    @variable(model, x_a[1:T.NArcs], Bin)
+
+    # y_a = 1 se x_a = 1 e não há triggers ativos pro arco a
+    @variable(model, y_a[1:T.NArcs], Bin)
+
+    # y_r = 1 se trigger r está ativo
+    @variable(model, y_r[1:T.NTriggers], Bin)
+
+    # y_hat_r = 1 se trigger r não está ativo porque o arco target precede o trigger na solução
+    @variable(model, y_hat_r[1:T.NTriggers], Bin)
+
+    # u_i = ordem do nó i na solução
+    @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
+
+
+    # soma dos custos dos arcos sem trigger e com trigger
+    if default_objective
+        @objective(model, Min,  sum(T.Trigger[i].cost * y_r[i] for i in 1:T.NTriggers)
+                            + sum(T.Arc[i].cost * y_a[i] for i in 1:T.NArcs ))
+    end
+
+    # R1: Quantidade de arcos na solução deve ser igual ao número de nós
+    if get(active_constraints, "R1", true)
+        @constraint(model, R1, sum(x_a[j] for j in 1:T.NArcs) == T.NNodes ) 
+    end
+
+    
+    # R2 (MTZ): Se um arco (u,v) está na solução, entao u tem que vir antes de v na rota
+    if get(active_constraints, "R2", true)
+        @constraint(model, R2, u[1] == 1) # O nó 1 deve ser o primeiro na rota
+        @constraint(model, R2_[id in filter(i -> T.Arc[i].v != 1, 1:T.NArcs)], u[T.Arc[id].u] + 1 <= u[T.Arc[id].v] + (T.NNodes-1) * (1 - x_a[id])) #(T.NNodes-1) pra restrição ficar mais justa
+    end
+    
+    #R3: Conservação de fluxo    
+    (InArcs, OutArcs) = Build_In_Out_Arcs(T)
+    if get(active_constraints, "R3", true)
+        @constraint(model, R3_in[i in 1:T.NNodes], sum(x_a[ij] for ij in InArcs[i]) == 1) # Soma dos arcos que entram no nó i deve ser igual a 1
+        @constraint(model, R3_out[i in 1:T.NNodes], sum(x_a[ij] for ij in OutArcs[i]) == 1) # Soma dos arcos que saem do nó i deve ser igual a 1
+    end
+
+    #R4: ou y_a ou y_r devem ser 1 se o arco a está na solução
+    if get(active_constraints, "R4", true)        
+        for arc in 1:T.NArcs
+            arc_triggers = filter(t -> T.Trigger[t].target_arc_id == arc, 1:T.NTriggers)
+            @constraint(model, y_a[arc] + sum(y_r[trigger] for trigger in arc_triggers) == x_a[arc], base_name="R4_$(arc)")    
+        end
+    end
+    
+    for t in 1:T.NTriggers
+        trigger = T.Trigger[t]
+        id_trigger = trigger.trigger_arc_id
+        id_target = trigger.target_arc_id
+        
+        u_trigger = T.Arc[id_trigger].u
+        u_target = T.Arc[id_target].u
+        
+        #R5: Se o trigger está ativo, então o arco trigger deve estar na solução
+        if get(active_constraints, "R5", true)
+            @constraint(model, y_r[t] <= x_a[id_trigger], base_name="R5_$(t)") 
+        end
+        
+        #R6: Se um trigger está ativo, então o arco trigger deve vir antes do arco target na solução
+        if get(active_constraints, "R6", true) 
+            @constraint(model, u[u_trigger] + 1 <= u[u_target] + T.NNodes * (1 - y_r[t]), base_name="R6_$(t)")  
+        end
+        
+        #R7: Se um trigger não está ativo, então o arco target deve vir antes do arco trigger na solução
+        if get(active_constraints, "R7", true)
+            @constraint(model, u[u_target] + 1 <= u[u_trigger] + T.NNodes * (1 - y_hat_r[t]),  base_name="R7_$(t)")
+        end
+
+        #R8
+        if get(active_constraints, "R8", true)
+            @constraint(model, x_a[id_trigger] <= (1 - x_a[id_target]) + (1 - y_a[id_target]) + y_hat_r[t], base_name="R8_$(t)")
+        end
+
+        if get(active_constraints, "R9", true)            
+            for t2 in 1:T.NTriggers
+                if t != t2 && T.Trigger[t2].target_arc_id == id_target && t < t2
+                    trigger_2 = T.Trigger[t2]
+                    id_trigger_2 = trigger_2.trigger_arc_id                
+                    u_trigger_2 = T.Arc[id_trigger_2].u
+
+                    #DEBUG
+                    # expr = u[u_trigger_2] - u[u_trigger] - (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1)
+                    # println(trigger, trigger_2)
+                    # println(expr)
+
+                    #R9: Se dois triggers estão para o mesmo target, o último que aparece na rota é que deve estar ativo
+                    @constraint(model, u[u_trigger_2] - (T.NNodes * y_hat_r[t2]) <= u[u_trigger] + (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1), base_name="R9_$(t)_$(t2)")
+                end
+            end
+        end
+    end  
+end
+
+
+function build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda::Vector{FloatType}, gama::Dict{Tuple{IntType,IntType},FloatType}, delta::Vector{FloatType}, mu::Vector{FloatType})
+    x_a = model[:x_a]
+    y_a = model[:y_a]
+    y_r = model[:y_r]
+    y_hat_r = model[:y_hat_r]
+    u = model[:u]
+
+    relax_objective = AffExpr()
+
+    for i in 1:T.NTriggers
+        add_to_expression!(relax_objective, T.Trigger[i].cost, y_r[i])
+    end
+    for i in 1:T.NArcs
+        add_to_expression!(relax_objective, T.Arc[i].cost, y_a[i])
+    end
+
+    for t in 1:T.NTriggers
+        trigger  = T.Trigger[t]
+        trigger_id = trigger.trigger_arc_id
+        target_id  = trigger.target_arc_id
+
+        expr_R6 = u[T.Arc[trigger_id].u] + 1 - u[T.Arc[target_id].u] - (T.NNodes * (1 - y_r[t]))
+        add_to_expression!(relax_objective, delta[t], expr_R6)
+
+        expr_R7 = u[T.Arc[trigger_id].u] + 1 - u[T.Arc[target_id].u] - (T.NNodes * (1 - y_hat_r[t]))
+        add_to_expression!(relax_objective, mu[t], expr_R7)
+
+        expr_R8 = x_a[trigger_id] + x_a[target_id] + y_a[target_id] - y_hat_r[t] - 2
+        add_to_expression!(relax_objective, lambda[t], expr_R8)
+    end
+
+    for t1 in 1:T.NTriggers, t2 in t1+1:T.NTriggers
+        if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+            trigger_1_id = T.Trigger[t1].trigger_arc_id
+            trigger_2_id = T.Trigger[t2].trigger_arc_id
+
+            expr_R9 = u[T.Arc[trigger_2_id].u] - u[T.Arc[trigger_1_id].u] -  (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t1] - x_a[trigger_2_id])) + 1
+
+            add_to_expression!(relax_objective, gama[(t1,t2)], expr_R9)
+        end
+    end
+
+    return relax_objective
+end
+
 
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
@@ -39,8 +185,7 @@ end
 function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP)
     # This routine only changes the fields
     # time_lb_rlxlag
-    # lb_rlxlag
-    
+    # lb_rlxlag    
     
     # Ideias:
     # 1. Dualizar as restrições de conservação de fluxo. Daí permite que encontre subciclos. 
@@ -49,7 +194,123 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP)
     # 3. Relaxar todas as restrições do TA (com exceção  da 6) e resolver o TSP puro. Precisa conferir, mas acredito que mantendo a 6, a função objetivo 
     #    vai fazer o algoritmo escolher os trigger arcs mais baratos.
     # Retorna lb_rlxlag
-    println("The function TriggerArcTSP_lb_rlxlag is not implemented yet.")
+
+    step_size = 0.05
+    
+    delta = zeros(T.NTriggers)
+    mu = zeros(T.NTriggers)
+    lambda = zeros(T.NTriggers)
+    gama = Dict{Tuple{IntType,IntType}, FloatType}()  
+    for t1 in 1:T.NTriggers, t2 in t1+1:T.NTriggers
+        if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+            gama[(t1,t2)] = 0.0           
+        end
+    end
+    
+    UB = Inf
+    LB = -Inf
+    bound = Inf 
+    arcs_LB = zeros(IntType, T.NArcs)
+   
+    active_constraints = Dict(
+        "R1" => true,
+        "R2" => true,
+        "R3" => true,
+        "R4" => true,
+        "R5" => true,
+        "R6" => false,  # Relaxa a R6
+        "R7" => false,  # Relaxa a R7
+        "R8" => false,  # Relaxa a R8
+        "R9" => false   # Relaxa a R9
+    )
+
+    model = Model(Gurobi.Optimizer)    
+    set_optimizer_attribute(model, "OutputFlag", 0)
+    Build_TATSP_Base_Model(model, T, active_constraints, false)
+    
+    for k in 1:1
+        objective_function = build_lagrangian_objective(model, T, lambda, gama, delta, mu)
+        # @objective(model, Min, objective_function, overwrite=true)
+        set_objective(model, MIN_SENSE, objective_function)
+
+        if verbose_mode
+            println("Model:", model)    
+        end
+        
+        println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
+        # set_time_limit_sec(model, 10)
+
+        optimize!(model)
+        
+        # println(primal_status(model))  
+
+        x_a = model[:x_a]
+        y_a = model[:y_a]
+        y_r = model[:y_r]
+        y_hat_r = model[:y_hat_r]
+        u = model[:u]
+
+        if has_values(model)    
+            bound = objective_value(model)
+        else
+            println("No solution was found within time limit.")
+            bound = -Inf
+        end 
+        
+        if bound > LB
+            LB = bound            
+            arcs_LB = [value(x_a[i]) for i in 1:T.NArcs]
+        end        
+
+
+        violations_R6 = zeros(T.NTriggers)
+        violations_R7 = zeros(T.NTriggers)
+        for t in 1:T.NTriggers
+            trigger_id = T.Trigger[t].trigger_arc_id
+            target_id  = T.Trigger[t].target_arc_id
+
+            violations_R6[t] = value(u[T.Arc[trigger_id].u]) + 1 - value(u[T.Arc[target_id].u]) - T.NNodes * (1 - value(y_r[t]))
+            violations_R7[t] = value(u[T.Arc[target_id].u]) + 1 - value(u[T.Arc[trigger_id].u]) - T.NNodes * (1 - value(y_hat_r[t]))
+        end
+
+        violations_R8 = similar(lambda)
+        for t in 1:T.NTriggers
+            trigger = T.Trigger[t].trigger_arc_id
+            target = T.Trigger[t].target_arc_id
+
+            violations_R8[t] = value(x_a[trigger]) + value(x_a[target]) + value(y_a[target]) - value(y_hat_r[t]) - 2 
+        end
+
+        violations_R9 = Dict{Tuple{IntType,IntType}, FloatType}()
+        for (t1,t2) in keys(gama)
+            trigger1 = T.Trigger[t1].trigger_arc_id
+            trigger2 = T.Trigger[t2].trigger_arc_id
+
+            violations_R9[(t1,t2)] = value(u[T.Arc[trigger2].u]) - value(u[T.Arc[trigger1].u]) - (T.NNodes * value(y_hat_r[t2])) - (T.NNodes * (2 - value(y_r[t1]) - value(x_a[trigger2]))) + 1
+        end
+        
+        
+        # violations = [violations_R8...; values(violations_R9)...]
+        # norm_sq = sum(v^2 for v in violations)
+        
+        # if isfinite(bound) && isfinite(UB) && norm_sq > 1e-8
+        #     theta = step_size * (UB - bound) / norm_sq
+        # else
+        #     theta = 0.0
+        # end
+        theta = step_size
+
+        delta   .= max.(0, delta .+ theta .* violations_R6)
+        mu   .= max.(0, mu .+ theta .* violations_R7)
+        lambda .= max.(0, lambda .+ theta .* violations_R8)
+        for p in keys(gama)
+            gama[p] = max(0, gama[p] + theta * violations_R9[p])
+        end
+
+        println("Iteration: $k, LB: $LB, Bound: $bound, Theta: $theta")
+    end
+
+    # println("Final LB: $LB")
 end
 
 # --------------------------------------------------------------
@@ -65,6 +326,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
 
     println("The function TriggerArcTSP_ub_rlxlag is not implemented yet.")
 end
+
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_colgen(T::TriggerArcTSP)
     # This routine only changes the fields
@@ -90,112 +352,40 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     # ub_ilp
     # ub_ilp_arcs
     # nn_ilp
-
+    
     # Branch and cut. Retorna o ub_ilp e lb_ilp.
+    model = Model(Gurobi.Optimizer)    
 
-    (InArcs, OutArcs) = Build_In_Out_Arcs(T)
-    model = Model(Gurobi.Optimizer)
-
-    # x_a = 1 se arco a está na solução
-    @variable(model, x_a[1:T.NArcs], Bin)
-
-    # y_a = 1 se x_a = 1 e não há triggers ativos pro arco a
-    @variable(model, y_a[1:T.NArcs], Bin)
-
-    # y_r = 1 se trigger r está ativo
-    @variable(model, y_r[1:T.NTriggers], Bin)
-
-    # y_hat_r = 1 se trigger r não está ativo porque o arco target precede o trigger na solução
-    @variable(model, y_hat_r[1:T.NTriggers], Bin)
-
-    # u_i = ordem do nó i na solução
-    @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
-
-
-    # soma dos custos dos arcos sem trigger e com trigger
-    @objective(model, Min,  sum(T.Trigger[i].cost * y_r[i] for i in 1:T.NTriggers)
-                          + sum(T.Arc[i].cost * y_a[i] for i in 1:T.NArcs ))
-
-    # R1: Quantidade de arcos na solução deve ser igual ao número de nós
-    @constraint(model, R1, sum(x_a[j] for j in 1:T.NArcs) == T.NNodes ) 
-
-    
-    # R2 (MTZ): Se um arco (u,v) está na solução, entao u tem que vir antes de v na rota
-    @constraint(model, R2, u[1] == 1) # O nó 1 deve ser o primeiro na rota
-    @constraint(model, R2_[id in filter(i -> T.Arc[i].v != 1, 1:T.NArcs)], u[T.Arc[id].u] + 1 <= u[T.Arc[id].v] + (T.NNodes-1) * (1 - x_a[id])) #(T.NNodes-1) pra restrição ficar mais justa
-
-
-    #R3: Conservação de fluxo    
-    @constraint(model, R3_in[i in 1:T.NNodes], sum(x_a[ij] for ij in InArcs[i]) == 1) # Soma dos arcos que entram no nó i deve ser igual a 1
-    @constraint(model, R3_out[i in 1:T.NNodes], sum(x_a[ij] for ij in OutArcs[i]) == 1) # Soma dos arcos que saem do nó i deve ser igual a 1
-    
-    #R4: ou y_a ou y_r devem ser 1 se o arco a está na solução
-    for arc in 1:T.NArcs
-        arc_triggers = filter(t -> T.Trigger[t].target_arc_id == arc, 1:T.NTriggers)
-        @constraint(model, y_a[arc] + sum(y_r[trigger] for trigger in arc_triggers) == x_a[arc], base_name="R4_$(arc)")    
-    end
-
-    
-    for t in 1:T.NTriggers
-        trigger = T.Trigger[t]
-        id_trigger = trigger.trigger_arc_id
-        id_target = trigger.target_arc_id
-        
-        u_trigger = T.Arc[id_trigger].u
-        u_target = T.Arc[id_target].u
-        
-        #R5: Se o trigger está ativo, então o arco trigger deve estar na solução
-        @constraint(model, y_r[t] <= x_a[id_trigger], base_name="R5_$(t)") 
-        
-        #R6: Se um trigger está ativo, então o arco trigger deve vir antes do arco target na solução
-        @constraint(model, u[u_trigger] + 1 <= u[u_target] + T.NNodes * (1 - y_r[t]), base_name="R6_$(t)")
-
-        #R7: Se um trigger não está ativo, então o arco target deve vir antes do arco trigger na solução
-        @constraint(model, u[u_target] + 1 <= u[u_trigger] + T.NNodes * (1 - y_hat_r[t]),  base_name="R7_$(t)")
-        
-        #R8: Se o arco target está na solução, 
-        @constraint(model, x_a[id_trigger] <= (1 - x_a[id_target]) + (1 - y_a[id_target]) + y_hat_r[t], base_name="R8_$(t)")
-
-        for t2 in 1:T.NTriggers
-            if t != t2 && T.Trigger[t2].target_arc_id == id_target && t < t2
-                trigger_2 = T.Trigger[t2]
-                id_trigger_2 = trigger_2.trigger_arc_id                
-                u_trigger_2 = T.Arc[id_trigger_2].u
-
-                #DEBUG
-                # expr = u[u_trigger_2] - u[u_trigger] - (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1)
-                # println(trigger, trigger_2)
-                # println(expr)
-
-                #R9: Se dois triggers estão para o mesmo target, o último que aparece na rota é que deve estar ativo
-                @constraint(model, u[u_trigger_2] - (T.NNodes * y_hat_r[t2]) <= u[u_trigger] + (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1), base_name="R9_$(t)_$(t2)")
-            end
-        end
-    end
-
+    Build_TATSP_Base_Model(model, T)
     if verbose_mode
         println("Model:", model)    
     end
     
+    println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
+    
+    set_time_limit_sec(model, T.maxtime_ilp)
     # set_objective_sense(model, FEASIBILITY_SENSE)
     optimize!(model)
-
-    # println(primal_status(model))
-
-
-    if termination_status(model) == MOI.OPTIMAL || termination_status(model) == MOI.TIME_LIMIT
-        T.lb_ilp = objective_value(model)
-        T.time_ilp = solve_time(model)
-        T.ub_ilp = T.lb_ilp  # Assuming the model is feasible and optimal
-        T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
-    else
-        println("Model is not optimal or feasible.")
-        T.time_ilp = 0.0
-        T.lb_ilp = Inf
-        T.ub_ilp = -Inf
-        T.ub_ilp_arcs = zeros(T.NArcs)
-    end
     
+    println(primal_status(model))    
+    
+    if has_values(model)    
+        x_a = model[:x_a]
+        
+        T.lb_ilp = objective_bound(model) 
+        gap = relative_gap(model)
+        T.time_ilp = solve_time(model)
+        T.ub_ilp = objective_value(model)
+        T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
+        VerifyIfSolutionIsFeasible(T, T.ub_ilp_arcs)
+    else
+        println("No solution was found within time limit.")
+        T.time_ilp = solve_time(model)
+        gap = Inf
+    end    
+ 
+    
+    println("Optimality Gap: ", gap)
     println("Time ILP: ", T.time_ilp)
     println("LB ILP: ", T.lb_ilp)
     println("UB ILP: ", T.ub_ilp)  

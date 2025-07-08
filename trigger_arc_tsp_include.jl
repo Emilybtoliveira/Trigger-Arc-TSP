@@ -6,15 +6,12 @@
 # ------------------------------------------------------------
 # Exemplo de execucao:
 #
-# julia tsp.jl --time 5 --nnodes 10 --seed 123 --distfactor 0.5
+# julia trigger_arc_tsp.jl --inputfilename inst-slide8.txt   --seednumber 1234  --maxtime_lb_lp 1010  --maxtime_lb_rlxlag 1020  --maxtime_lb_colgen 1030  --maxtime_ub_lp 1040  --maxtime_ub_rlxlag 1050 --maxtime_ub_colgen 1060 --maxtime_ilp 1070   --ra 123456 --verbose
 #
-# time: tempo maximo que seu programa pode executar
-# nnodes: numero de no's do grafo
-# seed: semente para iniciar a geracao de numeros aleatorios
-# 	num mesmo programa, para testar com instancias diferentes, basta
-#	usar outro numero aleatorio.
-# distfactor: para gerar o numero aleatorio, a entrada usa a distancia euclidiana
-# 	e acrescenta mais um fator percentual aleatorio dentro deste fator.
+# Segue explicacao de alguns parametros:
+# ra: seu numero de RA
+# maxtime-ilp: tempo maximo que seu programa pode usar para o branch and bound/cut
+# seednumber: semente para iniciar a geracao de numeros aleatorios
 #
 # --------------------------------------------------------
 #        Nao mude o conteudo deste arquivo
@@ -38,8 +35,6 @@ const MinInt	= typemin(IntType)
 const FloatType = Float64
 const MaxFloat	= typemax(FloatType)
 const MinFloat	= typemin(FloatType)
-
-const SolutionType = Vector{IntType}
 
 # Global variable to allow printing 
 verbose_mode = false
@@ -137,13 +132,13 @@ mutable struct TriggerArcTSP
 	maxtime_ilp::IntType	     # Max. time to compute LB/UB by exact Branch and Cut
 
 	# Output info: time used in each process
-	time_lb_lp::IntType       # Time used to compute LB by LP (may use cut.planes)
-	time_lb_rlxlag::IntType   # Time used to compute LB by Lagran. Relax.
-	time_lb_colgen::IntType   # Time used to compute LB via LP column gener.
+	time_lb_lp::FloatType       # Time used to compute LB by LP (may use cut.planes)
+	time_lb_rlxlag::FloatType   # Time used to compute LB by Lagran. Relax.
+	time_lb_colgen::FloatType   # Time used to compute LB via LP column gener.
 
-	time_ub_lp::IntType  	  # Time used to compute UB by LP rounding
-	time_ub_rlxlag::IntType   # Time used to compute UB by Lagran. Relax.
-	time_ub_colgen::IntType   # Time used to compute UB via LP column gener.
+	time_ub_lp::FloatType  	  # Time used to compute UB by LP rounding
+	time_ub_rlxlag::FloatType   # Time used to compute UB by Lagran. Relax.
+	time_ub_colgen::FloatType   # Time used to compute UB via LP column gener.
 
 	time_ilp::FloatType   	  # time used to compute LB/UB by exact Branch and Cut
 
@@ -232,7 +227,8 @@ mutable struct TriggerArcTSP
 		 
 		 0,		# default for nn_ilp, the number of branch and bound/cut tree
 		 999999,	# academic number
-		 "")		# logfilename
+		 "",		# logfilename
+		 )
 	end
 		 
 	function TriggerArcTSP( _inputfilename::String,
@@ -321,25 +317,33 @@ mutable struct TriggerArcTSP
 		     	(_Arc[_Trigger[t_id].target_arc_id].u != t_arctarg_u) ||
 		     	(_Arc[_Trigger[t_id].target_arc_id].v != t_arctarg_v))
 			error("Trigger relation has wrong values.")
+		     elseif (t_cost == MaxFloat)
+		     	error("Triggered arc cost cannot be equal to MaxFloat")
+			# We use the value MaxFloat as a flag.
 		     end
 		 end
 		 close(fp)
 
 		 # We can represent a solution, say ub, as a vector indexed by the node ids.
 		 # Given a node i (i in 1,...,NNodes) and an arc a=(i,j),
-		 # we can have ub[i]=a. In this case, the arc living node i in the solution ub
+		 # we can have ub[i]=a. In this case, the arc leaving node i in the solution ub
 		 # uses arc a. So, the next node after i is the node Arc[a].v
 		 _ub_lp_arcs	 = Vector{IntType}(undef,_NNodes)
 		 _ub_rlxlag_arcs = Vector{IntType}(undef,_NNodes)
 		 _ub_colgen_arcs = Vector{IntType}(undef,_NNodes)
 		 _ub_ilp_arcs    = Vector{IntType}(undef,_NNodes)
-		 for i in 1:_NNodes
-		     _ub_lp_arcs[i]     = -1
-		     _ub_rlxlag_arcs[i] = -1
-		     _ub_colgen_arcs[i] = -1
-		     _ub_ilp_arcs[i]    = -1
-		 end
+		 # for i in 1:_NNodes
+		 #     _ub_lp_arcs[i]     = -1
+		 #     _ub_rlxlag_arcs[i] = -1
+		 #     _ub_colgen_arcs[i] = -1
+		 #     _ub_ilp_arcs[i]    = -1
+		 # end
+		 _ub_lp_arcs     .= -1
+		 _ub_rlxlag_arcs .= -1
+		 _ub_colgen_arcs .= -1
+		 _ub_ilp_arcs    .= -1
 		 
+
 		 new(_NNodes,_NArcs,_NTriggers,
 		     _Node,_Arc,_Trigger,
 		     _inputfilename,_seednumber,
@@ -375,6 +379,7 @@ mutable struct TriggerArcTSP
 			_logfilename)   # logfilename
 	end
 end
+
 
 function write_instance(T::TriggerArcTSP, outputfilename::String)
 	 fp=open(outputfilename,"w")
@@ -462,7 +467,7 @@ function Build_In_Out_Arcs(T::TriggerArcTSP)
 	 return(InArcs,OutArcs)
 end
 
-# After building the InArcs and OutArcs with the previou routine, you can
+# After building the InArcs and OutArcs with the previous routine, you can
 # print them with the Print_Incident_Arcs routine.
 # Example: Print_Incident_Arcs(T,InArcs,"InArc")
 #
@@ -480,6 +485,48 @@ function Print_Incident_Arcs(T::TriggerArcTSP,IncidentArcs::Vector{Vector{IntTyp
 	     println()
 	 end
 end
+	 
+function Build_Triggered_List(T::TriggerArcTSP)
+	 # TriggeredList is a vector (indexed by arcs),
+	 # each element is a vector of pairs (a,cost), of a target arc and its cost
+	 TriggeredList = Vector{Vector{Pair{IntType,FloatType}}}(undef,T.NNodes)
+	 
+	 # Starts the set of arcs entering and leaving as empty sets
+	 for v in 1:T.NNodes
+	     TriggeredList[v] = Pair{IntType,FloatType}[] # empty vector
+	 end
+	 # For each arc 'a=(u,v)', include 'a' in the OutArcs[u] and InArcs[v]
+	 for t in 1:T.NTriggers
+	     append!(TriggeredList[T.Trigger[t].trigger_arc_id],
+		    (T.Trigger[t].target_arc_id,T.Trigger[t].cost))
+	 end
+	 return(TriggeredList)
+end
+
+# function SolutionCost(T::TriggerArcTSP,ub::Vector{IntType})
+# 	 SArc = Vector{IntType}(undef,T.NNodes)
+# 	 # Gera a solucao em 'SArc' como uma sequencia de arcos na ordem do ciclo
+# 	 u = 1
+# 	 for i in 1:T.NNodes
+# 	     SArc[i] = ub[u]
+# 	     u = T.Arc[ub[u]].v
+# 	 end
+# 	 TotalCost = 0.0
+# 	 for i in reverse(1:T.NNodes)
+# 	     a = SArc[i]
+# 	     Cost=T.Arc[a].cost
+# 	     for j in reverse(1:i-1)
+# 	     	 t = SArc[j]
+# 		 if (T.triggered[t,a]!=MaxFloat)
+# 		    Cost = T.triggered[t,a]
+# 		    break
+# 		 end
+# 	     end
+# 	     TotalCost += Cost
+# 	  end
+# 	  return(TotalCost)
+# end
+	     
 	 
 
 
@@ -560,96 +607,100 @@ function getparameters()
     maxtime_ub_colgen=MaxInt
     maxtime_ilp=MaxInt
     ra=999999
-	 
+
     parsed_args = parse_commandline()
    
     for (arg,val) in parsed_args
+    
 	if "$arg"=="seednumber"
 	   seednumber=parse(Int,"$val")
-	end
-	if "$arg"=="inputfilename"
+	   
+	elseif "$arg"=="inputfilename"
 	   inputfilename="$val"
 	   if (!isfile(inputfilename))
 	      error("Could not find file "*inputfilename)
 	   end
-	end
-	if "$arg"=="logfile"
+	   
+	elseif "$arg"=="logfile"
 	   logfilename="$val"
-	end
-	if "$arg"=="verbose"
+	   
+	elseif "$arg"=="verbose"
 	   if "$val"=="true"
 	      verbose_mode = true
 	   else
 	      verbose_mode = false
 	   end
-	end
-	if "$arg"=="ra"
+	   
+	elseif "$arg"=="ra"
 	   ra=parse(IntType,"$val")
 	   if (ra<0)
 	      error("RA - Academic Number must be a positive integer")
 	   end
-	end
-	if "$arg"=="maxtime_lb_lp"
+	   
+	elseif "$arg"=="maxtime_lb_lp"
 	   maxtime_lb_lp=parse(IntType,"$val")
 	   if (maxtime_lb_lp<0)
 	      error("maxtime_lb_lp must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_lb_rlxlag"
+	   
+	elseif "$arg"=="maxtime_lb_rlxlag"
 	   maxtime_lb_rlxlag=parse(IntType,"$val")
 	   if (maxtime_lb_rlxlag<0)
 	      error("maxtime_lb_rlxlag must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_lb_colgen"
+	   
+	elseif "$arg"=="maxtime_lb_colgen"
 	   maxtime_lb_colgen=parse(IntType,"$val")
 	   if (maxtime_lb_colgen<0)
 	      error("maxtime_lb_colgen must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_ub_lp"
+	   
+	elseif "$arg"=="maxtime_ub_lp"
 	   maxtime_ub_lp=parse(IntType,"$val")
 	   if (maxtime_ub_lp<0)
 	      error("maxtime_ub_lp must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_ub_rlxlag"
+	   
+	elseif "$arg"=="maxtime_ub_rlxlag"
 	   maxtime_ub_rlxlag=parse(IntType,"$val")
 	   if (maxtime_ub_rlxlag<0)
 	      error("maxtime_ub_rlxlag must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_ub_colgen"
+	   
+	elseif "$arg"=="maxtime_ub_colgen"
 	   maxtime_ub_colgen=parse(IntType,"$val")
 	   if (maxtime_ub_colgen<0)
 	      error("maxtime_ub_colgen must be a positive integer (time in seconds)")
 	   end
-	end
-	if "$arg"=="maxtime_ilp"
+	   
+	elseif "$arg"=="maxtime_ilp"
 	   maxtime_ilp=parse(IntType,"$val")
 	   if (maxtime_ilp<0)
 	      error("maxtime_ilp must be a positive integer (time in seconds)")
 	   end
+	   
+	else
+	  error("Unknown parameter $arg.")
 	end
     end
 
-    if (verbose_mode)
-       println()
-       PrintHeader("Command line parameters")
-       println("inputfilename =      ",inputfilename)
-       println("seednumber =         ",seednumber)
-       println("maxtime_lb_lp =      ",maxtime_lb_lp)
-       println("maxtime_lb_rlxlag =  ",maxtime_lb_rlxlag)
-       println("maxtime_lb_colgen =  ",maxtime_lb_colgen)
-       println("maxtime_ub_lp =      ",maxtime_ub_lp)
-       println("maxtime_ub_rlxlag =  ",maxtime_ub_rlxlag)
-       println("maxtime_ub_colgen =  ",maxtime_ub_colgen)
-       println("maxtime_ilp =        ",maxtime_ilp,)
-       println("ra =                 ",ra)
-       println("verbose_mode =       ",verbose_mode)
-       println("logfilename =        ",logfilename)
-       println()
-    end
+    # if (verbose_mode)
+    #    println()
+    #    PrintHeader("Command line parameters")
+    #    println("inputfilename =      ",inputfilename)
+    #    println("seednumber =         ",seednumber)
+    #    println("maxtime_lb_lp =      ",maxtime_lb_lp)
+    #    println("maxtime_lb_rlxlag =  ",maxtime_lb_rlxlag)
+    #    println("maxtime_lb_colgen =  ",maxtime_lb_colgen)
+    #    println("maxtime_ub_lp =      ",maxtime_ub_lp)
+    #    println("maxtime_ub_rlxlag =  ",maxtime_ub_rlxlag)
+    #    println("maxtime_ub_colgen =  ",maxtime_ub_colgen)
+    #    println("maxtime_ilp =        ",maxtime_ilp,)
+    #    println("ra =                 ",ra)
+    #    println("verbose_mode =       ",verbose_mode)
+    #    println("logfilename =        ",logfilename)
+    #    println()
+    # end
 
     return(inputfilename,	# input file 
 	 seednumber,		# Randomized steps become deterministic for fixed seed
