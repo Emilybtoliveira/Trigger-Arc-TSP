@@ -29,6 +29,15 @@ function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_con
 
     # u_i = ordem do nó i na solução
     @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
+    else 
+        #Variáveis continuas
+        @variable(model, 0 <= x_a[1:T.NArcs] <= 1)
+        @variable(model, 0 <= y_a[1:T.NArcs] <= 1)
+        @variable(model, 0 <= y_r[1:T.NTriggers] <= 1)
+        @variable(model, 0 <= y_hat_r[1:T.NTriggers] <= 1)
+        @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
+    end
+    
 
     # soma dos custos dos arcos sem trigger e com trigger
     if default_objective
@@ -187,8 +196,48 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     # time_lb_lp
     # lb_lp
     # O que fazer aqui? (Branch and cut pra achar lower bound??)
+    # Ideia: simplesmente relaxa o problema e resolve.
     
-    println("The function TriggerArcTSP_lb_lp is not implemented yet.")
+    model = Model(Gurobi.Optimizer)    
+
+    Build_TATSP_Base_Model(model, T; relaxed_vars=true)
+    if verbose_mode
+        println("Model:", model)    
+    end
+    
+    println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
+    
+    set_time_limit_sec(model, T.maxtime_lb_lp)
+    # set_objective_sense(model, FEASIBILITY_SENSE)
+    optimize!(model)
+    
+    println(primal_status(model))    
+    
+    if has_values(model)    
+        x_a = model[:x_a]
+        u = model[:u]
+        
+        T.lb_ilp = objective_bound(model) 
+        T.time_ilp = solve_time(model)
+        T.ub_ilp = objective_value(model)
+        T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
+        gap = relative_gap(model)
+        u = [value(u[i]) for i in 1:T.NNodes]
+
+        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs, u)
+        println("Result of feasibility evaluation: $is_feasible")
+    else
+        println("No solution was found within time limit.")
+        T.time_ilp = solve_time(model)
+        gap = Inf
+    end    
+ 
+    
+    println("Optimality Gap: ", gap)
+    println("Time ILP: ", T.time_ilp)
+    println("LB ILP: ", T.lb_ilp)
+    println("UB ILP: ", T.ub_ilp)  
+    println("UB ILP arcs: ", T.ub_ilp_arcs)
 end
 
 # --------------------------------------------------------------
@@ -198,7 +247,7 @@ function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
     # time_ub_lp
     # ub_lp
     # ub_lp_arcs
-    # O que fazer aqui? Heuristica (arredondamento, fixação de variaveis, etc)
+    # Ideia: Fixação de variáveis
     
     println("The function TriggerArcTSP_ub_lp is not implemented yet.")
 end
