@@ -14,21 +14,23 @@ using JuMP
 using Gurobi
 using DataStructures
 
-function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true)  
-    # x_a = 1 se arco a está na solução
-    @variable(model, x_a[1:T.NArcs], Bin)
+function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true, relaxed_vars::Bool=false)  
+    if !relaxed_vars 
+        # Variáveis inteiras
+        # x_a = 1 se arco a está na solução
+        @variable(model, x_a[1:T.NArcs], Bin)
 
-    # y_a = 1 se x_a = 1 e não há triggers ativos pro arco a
-    @variable(model, y_a[1:T.NArcs], Bin)
+        # y_a = 1 se x_a = 1 e não há triggers ativos pro arco a
+        @variable(model, y_a[1:T.NArcs], Bin)
 
-    # y_r = 1 se trigger r está ativo
-    @variable(model, y_r[1:T.NTriggers], Bin)
+        # y_r = 1 se trigger r está ativo
+        @variable(model, y_r[1:T.NTriggers], Bin)
 
-    # y_hat_r = 1 se trigger r não está ativo porque o arco target precede o trigger na solução
-    @variable(model, y_hat_r[1:T.NTriggers], Bin)
+        # y_hat_r = 1 se trigger r não está ativo porque o arco target precede o trigger na solução
+        @variable(model, y_hat_r[1:T.NTriggers], Bin)
 
-    # u_i = ordem do nó i na solução
-    @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
+        # u_i = ordem do nó i na solução
+        @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
     else 
         #Variáveis continuas
         @variable(model, 0 <= x_a[1:T.NArcs] <= 1)
@@ -120,7 +122,6 @@ function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_con
     end  
 end
 
-
 function Build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda::Vector{FloatType}, gama::Dict{Tuple{IntType,IntType},FloatType}, delta::Vector{FloatType}, mu::Vector{FloatType})
     x_a = model[:x_a]
     y_a = model[:y_a]
@@ -152,14 +153,16 @@ function Build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda:
         add_to_expression!(relax_objective, lambda[t], expr_R8)
     end
 
-    for t1 in 1:T.NTriggers, t2 in t1+1:T.NTriggers
-        if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
-            trigger_1_id = T.Trigger[t1].trigger_arc_id
-            trigger_2_id = T.Trigger[t2].trigger_arc_id
+    for t1 in 1:T.NTriggers
+        for t2 in t1+1:T.NTriggers
+            if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+                trigger_1_id = T.Trigger[t1].trigger_arc_id
+                trigger_2_id = T.Trigger[t2].trigger_arc_id
 
-            expr_R9 = u[T.Arc[trigger_2_id].u] - u[T.Arc[trigger_1_id].u] -  (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t1] - x_a[trigger_2_id])) + 1
+                expr_R9 = u[T.Arc[trigger_2_id].u] - u[T.Arc[trigger_1_id].u] -  (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t1] - x_a[trigger_2_id])) + 1
 
-            add_to_expression!(relax_objective, gama[(t1,t2)], expr_R9)
+                add_to_expression!(relax_objective, gama[(t1,t2)], expr_R9)
+            end
         end
     end
 
@@ -188,6 +191,7 @@ function Get_Feasible_Solution_From_LB(T::TriggerArcTSP, lb_sol::Vector{FloatTyp
     sol_real_cost = GetRouteCost(T, route)	
 
     #TODO: 2-opt local search
+    #TODO 2: precisa retornar cost, x_a, y_a, y_r, y_hat_r, u
     return sol_real_cost, new_sol
 end
 # --------------------------------------------------------------
@@ -360,6 +364,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         end  
         
         # Finds an upper bound by transforming the lower bound solution into a feasible solution
+        #TODO: armazenar o restante das variaveis
         UB, arcs_UB = Get_Feasible_Solution_From_LB(T, arcs_LB)
         if UB < best_UB
             best_UB = UB
@@ -439,29 +444,145 @@ function TriggerArcTSP_ub_colgen(T::TriggerArcTSP)
 end
 
 # --------------------------------------------------------------
+
+
 function TriggerArcTSP_ilp(T::TriggerArcTSP)
     # This routine only changes the fields
     # time_ilp
     # lb_ilp
     # ub_ilp
     # ub_ilp_arcs
-    # nn_ilp
+    # nn_ilp   
     
-    # Branch and cut. Retorna o ub_ilp e lb_ilp.
+    active_constraints = Dict(
+        "R1" => true,
+        "R2" => true,
+        "R3" => true,
+        "R4" => true, 
+        "R5" => true,
+        "R6" => true,
+        "R7" => true,
+        "R8" => true, # lazy constraint
+        "R9" => false  # lazy constraint
+    )
+        
     model = Model(Gurobi.Optimizer)    
-
-    Build_TATSP_Base_Model(model, T)
+    Build_TATSP_Base_Model(model, T, active_constraints)
     if verbose_mode
         println("Model:", model)    
     end
-    
     println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
+
+
+    function Cutting_Planes_Callback(cb_data)
+        status = callback_node_status(cb_data, model)
+        if status != MOI.CALLBACK_NODE_STATUS_INTEGER
+            # println("not integer")
+            return  # Only run at integer solutions
+        end    
+
+        # println("Solution is: ", callback_value.(cb_data, model[:x_a]))
+
+        x_a = callback_value.(cb_data, model[:x_a])
+        y_a = callback_value.(cb_data, model[:y_a])
+        y_r = callback_value.(cb_data, model[:y_r])
+        y_hat_r = callback_value.(cb_data, model[:y_hat_r])
+        u = callback_value.(cb_data, model[:u])
+        epsilon = 1e-5
+        cuts_added = 0
+        
+        # for arc in 1:T.NArcs
+        #     if x_a[arc] >= (1 - epsilon) #arco selecionado
+        #         arc_triggers = filter(r -> T.Trigger[r].target_arc_id == arc, 1:T.NTriggers)
+        #         y_sum = y_a[arc] + sum(y_r[r] for r in arc_triggers)
+        #         if y_sum < 1 - epsilon
+        #             #R4: ou y_a ou sum(y_r) devem ser 1 se o arco a está na solução
+        #             R4 = @build_constraint(model[:y_a][arc] + sum(model[:y_r][r] for r in arc_triggers) >= model[:x_a][arc])
+        #             MOI.submit(model, MOI.LazyConstraint(cb_data), R4)
+        #             cuts_added += 1
+        #         end
+        #     end
+        # end
+
+        for t1 in 1:T.NTriggers
+            #R8
+            # trigger1_id = T.Trigger[t1].trigger_arc_id
+            # target_id  = T.Trigger[t1].target_arc_id
+
+            # rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t1]
+
+            # if x_a[trigger1_id] > rhs + epsilon # violação da restrição
+            #     R8 = @build_constraint(model[:x_a][trigger1_id] <= (1 - model[:x_a][target_id]) + (1 - model[:y_a][target_id]) + model[:y_hat_r][t1])
+            #     MOI.submit(model, MOI.LazyConstraint(cb_data), R8)
+            #     cuts_added += 1
+            # end
+
+            for t2 in (t1+1):T.NTriggers
+                #R9
+                if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+                    u1 = u[T.Arc[T.Trigger[t1].trigger_arc_id].u]
+                    u2 = u[T.Arc[T.Trigger[t2].trigger_arc_id].u]
+
+                    if u2 - (T.NNodes * y_hat_r[t2]) > u1 + (T.NNodes * (2 - y_r[t1] - x_a[T.Trigger[t2].trigger_arc_id])) - 1 + epsilon  # violação da restrição
+                        R9 = @build_constraint(model[:u][T.Arc[T.Trigger[t2].trigger_arc_id].u] - (T.NNodes * model[:y_hat_r][t2]) <= 
+                                                model[:u][T.Arc[T.Trigger[t1].trigger_arc_id].u] + T.NNodes * (2 - model[:y_r][t1] - model[:x_a][T.Trigger[t2].trigger_arc_id]) - 1)
+                        MOI.submit(model, MOI.LazyConstraint(cb_data), R9)
+                        cuts_added += 1
+                    end
+                end
+            end
+        end
+
+        # (InArcs, OutArcs) = Build_In_Out_Arcs(T)
+
+        # for i in 1:T.NNodes
+        #     in_arcs_i = InArcs[i]  
+        #     out_arcs_i = OutArcs[i]
+
+        #     sum_in = sum(x_a[a] for a in in_arcs_i)
+        #     sum_out = sum(x_a[a] for a in out_arcs_i)
+
+        #     if abs(sum_in - 1) > epsilon
+        #         R3_1 = @build_constraint((sum(model[:x_a][a] for a in in_arcs_i)) == 1)
+        #         MOI.submit(model, MOI.LazyConstraint(cb_data), R3_1)
+        #         cuts_added += 1
+        #     end
+
+        #     if abs(sum_out - 1) > epsilon
+        #         R3_2 = @build_constraint((sum(model[:x_a][a] for a in out_arcs_i)) == 1)
+        #         MOI.submit(model, MOI.LazyConstraint(cb_data), R3_2)
+        #         cuts_added += 1
+        #     end
+        # end
+
+        println("Added $cuts_added cuts.")
+        return
+    end  
     
+    function Primal_Heuristic_Callback(model, T)
+        x_a_current = callback_value.(cb_data, model[:x_a])
+
+        cost, x_a_new, y_a, y_r, y_hat_r, u = Get_Feasible_Solution_From_LB(T, x_val)
+
+        if cost < Inf
+            MOI.submit(model, MOI.HeuristicSolution(cb_data),
+                [model[:x_a]; model[:y_a]; model[:y_r]; model[:y_hat_r]; model[:u]],
+                [x_a_new; y_a; y_r; y_hat_r; u]
+            )
+        end
+
+        return
+    end
+        
+    
+    set_attribute(model, MOI.LazyConstraintCallback(), Cutting_Planes_Callback)    
+    # set_attribute(model, MOI.HeuristicCallback(), Primal_Heuristic_Callback)
+
     set_time_limit_sec(model, T.maxtime_ilp)
-    # set_objective_sense(model, FEASIBILITY_SENSE)
+    
     optimize!(model)
     
-    println(primal_status(model))    
+    # println(primal_status(model))    
     
     if has_values(model)    
         x_a = model[:x_a]
@@ -474,7 +595,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         gap = relative_gap(model)
         u = [value(u[i]) for i in 1:T.NNodes]
 
-        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs, u)
+        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs)
         println("Result of feasibility evaluation: $is_feasible")
     else
         println("No solution was found within time limit.")
@@ -488,6 +609,5 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     println("LB ILP: ", T.lb_ilp)
     println("UB ILP: ", T.ub_ilp)  
     println("UB ILP arcs: ", T.ub_ilp_arcs)
-
 end
 # --------------------------------------------------------------
