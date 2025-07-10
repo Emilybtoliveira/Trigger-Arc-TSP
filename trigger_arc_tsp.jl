@@ -17,7 +17,7 @@ using Random
 include("trigger_arc_tsp_include.jl")	# Nao mude este arquivo
 include("trigger_arc_tsp_routines.jl")	# Coloque suas rotinas neste arquivo
 include("exemplo_usando_pli.jl")
-
+include("helper.jl")
 
 function main()
 	 
@@ -73,26 +73,26 @@ function main()
 
 	# print_instance(T)
 
-	TriggerArcTSP_lb_lp(T)
-	WriteLogFile(T,"lb_lp")
+	# TriggerArcTSP_lb_lp(T)
+	#WriteLogFile(T,"lb_lp")
 	
-	TriggerArcTSP_lb_rlxlag(T)
-	WriteLogFile(T,"lb_rlxlag")
+	# TriggerArcTSP_lb_rlxlag(T)
+	#WriteLogFile(T,"lb_rlxlag")
 	
-	TriggerArcTSP_lb_colgen(T)
-	WriteLogFile(T,"lb_colgen")
+	# TriggerArcTSP_lb_colgen(T)
+	#WriteLogFile(T,"lb_colgen")
 	
-	TriggerArcTSP_ub_lp(T)
-	WriteLogFile(T,"ub_lp")
+	# TriggerArcTSP_ub_lp(T)
+	#WriteLogFile(T,"ub_lp")
 
 	TriggerArcTSP_ub_rlxlag(T)
-	WriteLogFile(T,"ub_rlxlag")
+	#WriteLogFile(T,"ub_rlxlag")
 
-	TriggerArcTSP_ub_colgen(T)
-	WriteLogFile(T,"ub_colgen")
+	# TriggerArcTSP_ub_colgen(T)
+	#WriteLogFile(T,"ub_colgen")
 	
-	TriggerArcTSP_ilp(T)
-	WriteLogFile(T,"ilp")
+	# TriggerArcTSP_ilp(T)
+	#WriteLogFile(T,"ilp")
 
 	# Exemplo_PLI(T,10)
 end

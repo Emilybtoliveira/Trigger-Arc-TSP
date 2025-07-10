@@ -43,7 +43,7 @@ test:
 			--maxtime_ub_rlxlag 1050 \
 			--maxtime_ub_colgen 1060 \
 			--maxtime_ilp 60 \
-			--ra 291207 \
+			--ra 291111 \
 			--logfile trigger_arc_tsp.log
 
 # Regra 'clean': remove todos os arquivos de log gerados

@@ -126,7 +126,7 @@ mutable struct TriggerArcTSP
 	maxtime_lb_colgen::IntType   # Max. time to compute LB via LP column gener.
 	
 	maxtime_ub_lp::IntType       # Max. time to compute UB by LP rounding
-	maxtime_ub_rlxlag::IntType   # Max. time to compute UB by Lagran. Relax.
+	maxtime_ub_rlxlag::FloatType   # Max. time to compute UB by Lagran. Relax.
 	maxtime_ub_colgen::IntType   # Max. time to compute UB via LP column gener.
 
 	maxtime_ilp::IntType	     # Max. time to compute LB/UB by exact Branch and Cut
@@ -235,11 +235,10 @@ mutable struct TriggerArcTSP
 				_seednumber::IntType,
 				_maxtime_lb_lp::IntType, 
 			 	_maxtime_lb_rlxlag::IntType,
-	 		 	_maxtime_lb_colgen::IntType,
-				
+	 		 	_maxtime_lb_colgen::IntType,				
 			 	_maxtime_ub_lp::IntType,
-				_maxtime_ub_colgen::IntType,
 				_maxtime_ub_rlxlag::IntType,
+				_maxtime_ub_colgen::IntType,
 			 	_maxtime_ilp::IntType,
 				_ra::IntType,
 				_logfilename)
@@ -503,29 +502,29 @@ function Build_Triggered_List(T::TriggerArcTSP)
 	 return(TriggeredList)
 end
 
-# function SolutionCost(T::TriggerArcTSP,ub::Vector{IntType})
-# 	 SArc = Vector{IntType}(undef,T.NNodes)
-# 	 # Gera a solucao em 'SArc' como uma sequencia de arcos na ordem do ciclo
-# 	 u = 1
-# 	 for i in 1:T.NNodes
-# 	     SArc[i] = ub[u]
-# 	     u = T.Arc[ub[u]].v
-# 	 end
-# 	 TotalCost = 0.0
-# 	 for i in reverse(1:T.NNodes)
-# 	     a = SArc[i]
-# 	     Cost=T.Arc[a].cost
-# 	     for j in reverse(1:i-1)
-# 	     	 t = SArc[j]
-# 		 if (T.triggered[t,a]!=MaxFloat)
-# 		    Cost = T.triggered[t,a]
-# 		    break
-# 		 end
-# 	     end
-# 	     TotalCost += Cost
-# 	  end
-# 	  return(TotalCost)
-# end
+function SolutionCost(T::TriggerArcTSP, ub::Vector{IntType})
+	SArc = Vector{IntType}(undef,T.NNodes)
+	# Gera a solucao em 'SArc' como uma sequencia de arcos na ordem do ciclo
+	u = 1
+	for i in 1:T.NNodes
+		SArc[i] = ub[u]
+		u = T.Arc[ub[u]].v
+	end
+	TotalCost = 0.0
+	for i in reverse(1:T.NNodes)
+		a = SArc[i]
+		Cost=T.Arc[a].cost
+		for j in reverse(1:i-1)
+			t = SArc[j]
+			if (T.triggered[t,a]!=MaxFloat)
+			Cost = T.triggered[t,a]
+			break
+			end
+		end
+		TotalCost += Cost
+	end
+	return(TotalCost)
+end
 	     
 	 
 

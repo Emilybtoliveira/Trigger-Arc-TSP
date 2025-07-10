@@ -30,7 +30,6 @@ function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_con
     # u_i = ordem do nó i na solução
     @variable(model, 1 <= u[1:T.NNodes] <= T.NNodes, Int)
 
-
     # soma dos custos dos arcos sem trigger e com trigger
     if default_objective
         @objective(model, Min,  sum(T.Trigger[i].cost * y_r[i] for i in 1:T.NTriggers)
@@ -113,7 +112,7 @@ function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_con
 end
 
 
-function build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda::Vector{FloatType}, gama::Dict{Tuple{IntType,IntType},FloatType}, delta::Vector{FloatType}, mu::Vector{FloatType})
+function Build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda::Vector{FloatType}, gama::Dict{Tuple{IntType,IntType},FloatType}, delta::Vector{FloatType}, mu::Vector{FloatType})
     x_a = model[:x_a]
     y_a = model[:y_a]
     y_r = model[:y_r]
@@ -158,7 +157,30 @@ function build_lagrangian_objective(model::JuMP.Model, T::TriggerArcTSP, lambda:
     return relax_objective
 end
 
+function Get_Active_Constraints_For_lb_rlxlag()
+    active_constraints = Dict(
+        "R1" => true,
+        "R2" => true,
+        "R3" => true,
+        "R4" => true,
+        "R5" => true,
+        "R6" => false,  # Relaxa a R6
+        "R7" => false,  # Relaxa a R7
+        "R8" => false,  # Relaxa a R8
+        "R9" => false   # Relaxa a R9
+    )
+    return active_constraints
+end 
 
+#TODO: pensar em um nome melhor pra função
+function Get_Feasible_Solution_From_LB(T::TriggerArcTSP, lb_sol::Vector{FloatType})
+    new_sol = zeros(IntType, T.NArcs)
+    route = GetRouteFromSolution(T, lb_sol)
+    sol_real_cost = GetRouteCost(T, route)	
+
+    #TODO: 2-opt local search
+    return sol_real_cost, new_sol
+end
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     # This routine only changes the fields
@@ -182,21 +204,77 @@ function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
 end
 
 # --------------------------------------------------------------
-function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP)
+function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP, 
+                                 model = nothing,
+                                 lambda::Vector{FloatType} = zeros(T.NTriggers), 
+                                 gama::Dict{Tuple{IntType,IntType}, FloatType} = Dict{Tuple{IntType,IntType}, FloatType}(), 
+                                 delta::Vector{FloatType} = zeros(T.NTriggers), 
+                                 mu::Vector{FloatType} = zeros(T.NTriggers))
+
     # This routine only changes the fields
     # time_lb_rlxlag
     # lb_rlxlag    
     
-    # Ideias:
-    # 1. Dualizar as restrições de conservação de fluxo. Daí permite que encontre subciclos. 
-    #    Também poderia dualizar junto alguma das restrições do TA, por exemplo a de precedencia. Mas acho que talvez o lower bound fique muito distante.
-    # 2. Relaxar as restrições do MTZ, inclusive as do TA. Desse jeito, também poderiam ter subciclos.
-    # 3. Relaxar todas as restrições do TA (com exceção  da 6) e resolver o TSP puro. Precisa conferir, mas acredito que mantendo a 6, a função objetivo 
-    #    vai fazer o algoritmo escolher os trigger arcs mais baratos.
-    # Retorna lb_rlxlag
+    if model == nothing
+        model = Model(Gurobi.Optimizer)    
+        active_constraints = Get_Active_Constraints_For_lb_rlxlag()
+        Build_TATSP_Base_Model(model, T, active_constraints, false)
+    end 
+    
+    set_optimizer_attribute(model, "OutputFlag", 0)
+    objective_function = Build_lagrangian_objective(model, T, lambda, gama, delta, mu)
+    set_objective(model, MIN_SENSE, objective_function)
+
+    if verbose_mode
+        println("Model:", model)    
+    end
+    
+    println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
+    set_time_limit_sec(model, T.maxtime_lb_rlxlag)
+
+    optimize!(model)
+    
+    # println(primal_status(model))  
+
+    if has_values(model)    
+        T.lb_rlxlag = objective_value(model)
+        T.time_lb_rlxlag = solve_time(model)
+    else
+        println("No solution was found within time limit.")
+        T.lb_rlxlag = -Inf
+        T.time_lb_rlxlag = solve_time(model)
+    end 
+
+    println("Final LB: $(T.lb_rlxlag)")
+    VerifyIfSolutionIsFeasible(T, T.lb_rlxlag, [value(model[:x_a][i]) for i in 1:T.NArcs])
+    return T.lb_rlxlag
+end
+
+# --------------------------------------------------------------
+function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
+    # This routine only changes the fields
+    # time_ub_rlxlag
+    # ub_rlxlag
+    # ub_rlxlag_arcs
+
+    # Heuristica de Relaxação Lagraniana: Pega a solução relaxada, encontra uma solução viavel. 
+    # Aplica o subgradiente pra ajustar os multiplicadores de Lagrange.
 
     step_size = 0.05
+    theta = step_size
+    k = 1
     
+    #Initialize data structures
+    UB = Inf 
+    LB = -Inf 
+    arcs_best_UB = zeros(IntType, T.NArcs)
+    arcs_best_LB = zeros(IntType, T.NArcs)
+    best_UB = Inf
+    best_LB = -Inf
+    arcs_UB = zeros(IntType, T.NArcs)
+    arcs_LB = zeros(IntType, T.NArcs)
+    
+    #Initialize Lagrange multipliers
     delta = zeros(T.NTriggers)
     mu = zeros(T.NTriggers)
     lambda = zeros(T.NTriggers)
@@ -206,63 +284,41 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP)
             gama[(t1,t2)] = 0.0           
         end
     end
-    
-    UB = Inf
-    LB = -Inf
-    bound = Inf 
-    arcs_LB = zeros(IntType, T.NArcs)
-   
-    active_constraints = Dict(
-        "R1" => true,
-        "R2" => true,
-        "R3" => true,
-        "R4" => true,
-        "R5" => true,
-        "R6" => false,  # Relaxa a R6
-        "R7" => false,  # Relaxa a R7
-        "R8" => false,  # Relaxa a R8
-        "R9" => false   # Relaxa a R9
-    )
 
+    # Use the same model for all iterations
     model = Model(Gurobi.Optimizer)    
-    set_optimizer_attribute(model, "OutputFlag", 0)
+    active_constraints = Get_Active_Constraints_For_lb_rlxlag()
     Build_TATSP_Base_Model(model, T, active_constraints, false)
     
-    for k in 1:1
-        objective_function = build_lagrangian_objective(model, T, lambda, gama, delta, mu)
-        # @objective(model, Min, objective_function, overwrite=true)
-        set_objective(model, MIN_SENSE, objective_function)
+    start_time = time()
 
-        if verbose_mode
-            println("Model:", model)    
-        end
+    while (time() - start_time) < T.maxtime_ub_rlxlag
         
-        println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
-        # set_time_limit_sec(model, 10)
-
-        optimize!(model)
-        
-        # println(primal_status(model))  
+        # Finds lower bound with new values of the Lagrange multipliers
+        LB = TriggerArcTSP_lb_rlxlag(T, model, lambda, gama, delta, mu)
 
         x_a = model[:x_a]
         y_a = model[:y_a]
         y_r = model[:y_r]
         y_hat_r = model[:y_hat_r]
         u = model[:u]
-
-        if has_values(model)    
-            bound = objective_value(model)
-        else
-            println("No solution was found within time limit.")
-            bound = -Inf
-        end 
         
-        if bound > LB
-            LB = bound            
-            arcs_LB = [value(x_a[i]) for i in 1:T.NArcs]
-        end        
+        arcs_LB = [value(x_a[i]) for i in 1:T.NArcs]
+        
+        if LB > best_LB && LB <= best_UB
+            best_LB = LB
+            arcs_best_LB = arcs_LB
+        end  
+        
+        # Finds an upper bound by transforming the lower bound solution into a feasible solution
+        UB, arcs_UB = Get_Feasible_Solution_From_LB(T, arcs_LB)
+        if UB < best_UB
+            best_UB = UB
+            arcs_best_UB = arcs_UB
+        end
+        println("Iteration: $k, LB: $LB, Best LB: $best_LB, UB:$UB, Best UB: $best_UB, Theta: $theta")
 
-
+        #Computes violations of the constraints in the lower bound solution
         violations_R6 = zeros(T.NTriggers)
         violations_R7 = zeros(T.NTriggers)
         for t in 1:T.NTriggers
@@ -289,42 +345,31 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP)
             violations_R9[(t1,t2)] = value(u[T.Arc[trigger2].u]) - value(u[T.Arc[trigger1].u]) - (T.NNodes * value(y_hat_r[t2])) - (T.NNodes * (2 - value(y_r[t1]) - value(x_a[trigger2]))) + 1
         end
         
-        
-        # violations = [violations_R8...; values(violations_R9)...]
-        # norm_sq = sum(v^2 for v in violations)
-        
-        # if isfinite(bound) && isfinite(UB) && norm_sq > 1e-8
-        #     theta = step_size * (UB - bound) / norm_sq
-        # else
-        #     theta = 0.0
-        # end
-        theta = step_size
-
-        delta   .= max.(0, delta .+ theta .* violations_R6)
-        mu   .= max.(0, mu .+ theta .* violations_R7)
+        # Updates the Lagrange multipliers
+        delta .= max.(0, delta .+ theta .* violations_R6)
+        mu .= max.(0, mu .+ theta .* violations_R7)
         lambda .= max.(0, lambda .+ theta .* violations_R8)
         for p in keys(gama)
             gama[p] = max(0, gama[p] + theta * violations_R9[p])
         end
 
-        println("Iteration: $k, LB: $LB, Bound: $bound, Theta: $theta")
+        # Updates the step size using Polyak's rule        
+        violations = [violations_R6...;violations_R7...;violations_R8...;values(violations_R9)...]
+        norm_sq = sum(v^2 for v in violations)
+        
+        if isfinite(LB) && isfinite(best_UB) && norm_sq > 1e-8
+            theta = step_size * (best_UB - LB) / norm_sq
+        else
+            theta = step_size
+        end
+
+        k += 1
+        # println("Elapsed time $(time() - start_time)")
     end
 
-    # println("Final LB: $LB")
-end
-
-# --------------------------------------------------------------
-function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_ub_rlxlag
-    # ub_rlxlag
-    # ub_rlxlag_arcs
-
-    # Heuristica de Relaxação Lagraniana: Pega a solução relaxada, encontra uma solução viavel. 
-    # Aplica o subgradiente pra ajustar os multiplicadores de Lagrange.
-    # Retona ub_rlxlag.
-
-    println("The function TriggerArcTSP_ub_rlxlag is not implemented yet.")
+    T.time_ub_rlxlag =  time() - start_time
+    T.ub_rlxlag = best_UB
+    T.ub_rlxlag_arcs = arcs_best_UB
 end
 
 # --------------------------------------------------------------
@@ -371,13 +416,17 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     
     if has_values(model)    
         x_a = model[:x_a]
+        u = model[:u]
         
         T.lb_ilp = objective_bound(model) 
-        gap = relative_gap(model)
         T.time_ilp = solve_time(model)
         T.ub_ilp = objective_value(model)
         T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
-        VerifyIfSolutionIsFeasible(T, T.ub_ilp_arcs)
+        gap = relative_gap(model)
+        u = [value(u[i]) for i in 1:T.NNodes]
+
+        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs, u)
+        println("Result of feasibility evaluation: $is_feasible")
     else
         println("No solution was found within time limit.")
         T.time_ilp = solve_time(model)
