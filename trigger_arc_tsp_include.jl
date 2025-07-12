@@ -155,7 +155,7 @@ mutable struct TriggerArcTSP
 	ub_ilp::FloatType     # UB value of the best solution of exact Branch and Cut
 	
 	# Output info: set of arcs in the UB solutions obtained by each LP approach
-	ub_lp_arcs::Vector{IntType}   	 # UB sol. by LP rounding (set of arcs)
+	ub_lp_arcs::Vector{FloatType}   	 # UB sol. by LP rounding (set of arcs)
 	ub_rlxlag_arcs::Vector{IntType}  # UB sol. by Lag. Relax. (set of arcs)
 	ub_colgen_arcs::Vector{IntType}  # UB sol. by column gener. (set of arcs)
 	ub_ilp_arcs::Vector{IntType}  	 # best UB sol. of exact Branch and Cut (set of arcs)

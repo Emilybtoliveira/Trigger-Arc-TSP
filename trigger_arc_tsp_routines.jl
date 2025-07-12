@@ -14,7 +14,7 @@ using JuMP
 using Gurobi
 using DataStructures
 
-function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP,  active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true, relaxed_vars::Bool=false)  
+function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP, relaxed_vars::Bool=false, active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true)  
     if !relaxed_vars 
         # Variáveis inteiras
         # x_a = 1 se arco a está na solução
@@ -301,15 +301,9 @@ end
 
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_lb_lp
-    # lb_lp
-    # O que fazer aqui? (Branch and cut pra achar lower bound??)
-    # Ideia: simplesmente relaxa o problema e resolve.
-    
     model = Model(Gurobi.Optimizer)    
 
-    Build_TATSP_Base_Model(model, T; relaxed_vars=true)
+    Build_TATSP_Base_Model(model, T, true)
     if verbose_mode
         println("Model:", model)    
     end
@@ -326,27 +320,27 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
         x_a = model[:x_a]
         u = model[:u]
         
-        T.lb_ilp = objective_bound(model) 
-        T.time_ilp = solve_time(model)
-        T.ub_ilp = objective_value(model)
-        T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
+        T.lb_lp = objective_bound(model) 
+        T.time_lb_lp = solve_time(model)
+        T.ub_lp = objective_value(model)
+        T.ub_lp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
         gap = relative_gap(model)
         u = [value(u[i]) for i in 1:T.NNodes]
 
-        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs, u)
+        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)
         println("Result of feasibility evaluation: $is_feasible")
     else
         println("No solution was found within time limit.")
-        T.time_ilp = solve_time(model)
+        T.time_lb_lp = solve_time(model)
         gap = Inf
     end    
  
     
     println("Optimality Gap: ", gap)
-    println("Time ILP: ", T.time_ilp)
-    println("LB ILP: ", T.lb_ilp)
-    println("UB ILP: ", T.ub_ilp)  
-    println("UB ILP arcs: ", T.ub_ilp_arcs)
+    println("Time ILP: ", T.time_lb_lp)
+    println("LB ILP: ", T.lb_lp)
+    println("UB ILP: ", T.ub_lp)  
+    println("UB ILP arcs: ", T.ub_lp_arcs)
 end
 
 # --------------------------------------------------------------
@@ -369,14 +363,10 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP,
                                  delta::Vector{FloatType} = zeros(T.NTriggers), 
                                  mu::Vector{FloatType} = zeros(T.NTriggers))
 
-    # This routine only changes the fields
-    # time_lb_rlxlag
-    # lb_rlxlag    
-    
     if model == nothing
         model = Model(Gurobi.Optimizer)    
         active_constraints = Get_Active_Constraints_For_lb_rlxlag()
-        Build_TATSP_Base_Model(model, T, active_constraints, false)
+        Build_TATSP_Base_Model(model, T, false, active_constraints, false)
     end 
     
     set_optimizer_attribute(model, "OutputFlag", 0)
@@ -410,15 +400,10 @@ end
 
 # --------------------------------------------------------------
 function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_ub_rlxlag
-    # ub_rlxlag
-    # ub_rlxlag_arcs
-
     # Heuristica de Relaxação Lagraniana: Pega a solução relaxada, encontra uma solução viavel. 
     # Aplica o subgradiente pra ajustar os multiplicadores de Lagrange.
 
-    step_size = 0.05
+    step_size = 0.08
     theta = step_size
     k = 1
     
@@ -446,7 +431,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     # Use the same model for all iterations
     model = Model(Gurobi.Optimizer)    
     active_constraints = Get_Active_Constraints_For_lb_rlxlag()
-    Build_TATSP_Base_Model(model, T, active_constraints, false)
+    Build_TATSP_Base_Model(model, T, false, active_constraints, false)
     
     start_time = time()
 
@@ -469,8 +454,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         end  
         
         # Finds an upper bound by transforming the lower bound solution into a feasible solution
-        #TODO: armazenar o restante das variaveis
-        UB, arcs_UB = Get_Feasible_Solution_From_LB(T, arcs_LB)
+        UB, arcs_UB, _, _, _, _ = Apply_2_OPT_Heuristic(T, arcs_LB)
         if UB < best_UB
             best_UB = UB
             arcs_best_UB = arcs_UB
@@ -662,7 +646,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     function Primal_Heuristic_Callback(cb_data)
         x_a_current = callback_value.(cb_data, model[:x_a])
         # println(x_a_current)
-
+        
         cost, x_a_new, y_a, y_r, y_hat_r, u = Apply_2_OPT_Heuristic(T, x_a_current)
 
         if cost < Inf
