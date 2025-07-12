@@ -79,3 +79,49 @@ function GetRouteCost(T, route)
 
     return cost
 end
+
+
+function BuildGreedyRouteFromFractionalSolution(T::TriggerArcTSP, x_frac::Vector{Float64})
+    visited = Set{Int}()
+    route = Int[]
+    used_arcs = Set{Int}()
+    
+    current_node = 1
+    push!(visited, current_node)
+
+    while length(visited) < T.NNodes
+        best_arc = -1
+        best_score = -1.0
+
+        for arc_id in 1:T.NArcs
+            arc = T.Arc[arc_id]
+            if arc.u == current_node && !(arc.v in visited) && !(arc_id in used_arcs)
+                if x_frac[arc_id] > best_score 
+                    best_score = x_frac[arc_id]
+                    best_arc = arc_id
+                end
+            end
+        end
+
+        if best_arc == -1
+            # println("No feasible arc leaving node $current_node")
+            return []  
+        end
+
+        push!(route, best_arc)
+        push!(visited, T.Arc[best_arc].v)
+        push!(used_arcs, best_arc)
+
+        current_node = T.Arc[best_arc].v
+    end
+
+    final_arc = findfirst(a -> T.Arc[a].u == current_node && T.Arc[a].v == 1, 1:T.NArcs)
+    if final_arc == nothing
+        # println("No arc to close cicle")
+        return []
+    end
+
+    push!(route, final_arc)
+    return route
+end
+

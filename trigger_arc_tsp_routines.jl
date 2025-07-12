@@ -184,16 +184,121 @@ function Get_Active_Constraints_For_lb_rlxlag()
     return active_constraints
 end 
 
-#TODO: pensar em um nome melhor pra função
-function Get_Feasible_Solution_From_LB(T::TriggerArcTSP, lb_sol::Vector{FloatType})
-    new_sol = zeros(IntType, T.NArcs)
-    route = GetRouteFromSolution(T, lb_sol)
-    sol_real_cost = GetRouteCost(T, route)	
+function Apply_2_OPT_Heuristic(T::TriggerArcTSP, lb_sol::Vector{FloatType})
+    current_route = BuildGreedyRouteFromFractionalSolution(T, lb_sol)  
+    
+    if length(current_route) == 0
+        return Inf, nothing, nothing, nothing, nothing, nothing
+    end
+    
+    node_seq = [T.Arc[a].u for a in current_route] 
+    push!(node_seq, node_seq[1]) 
+    
+    best_route = copy(node_seq)
+    best_cost = GetRouteCost(T, current_route)
+    max_iterations = 100
+    improved = true
+    loops = 1
+    
+    while improved && loops <= max_iterations
+        improved = false
+        for i in 2:(T.NNodes - 1)
+            for j in (i + 1):T.NNodes
+                new_route = vcat(best_route[1:i-1], reverse(best_route[i:j]), best_route[j+1:end])
 
-    #TODO: 2-opt local search
-    #TODO 2: precisa retornar cost, x_a, y_a, y_r, y_hat_r, u
-    return sol_real_cost, new_sol
+                if length(unique(new_route[1:end-1])) != T.NNodes
+                    continue
+                end
+
+                valid = true
+                arc_list = IntType[]
+                for k in 1:T.NNodes
+                    u = new_route[k]
+                    v = new_route[k + 1]
+                    arc = findfirst(a -> T.Arc[a].u == u && T.Arc[a].v == v, 1:T.NArcs)
+                    if arc === nothing
+                        valid = false
+                        break
+                    end
+                    push!(arc_list, arc)
+                end
+
+                if !valid
+                    continue
+                end
+
+                cost = GetRouteCost(T, arc_list)
+                if cost < best_cost
+                    best_cost = cost
+                    best_route = new_route
+                    improved = true
+                    break
+                end
+            end
+        end
+        loops += 1
+    end
+
+    arc_route = [findfirst(a -> T.Arc[a].u == best_route[i] && T.Arc[a].v == best_route[i+1], 1:T.NArcs) for i in 1:T.NNodes]
+    
+    x_a = zeros(IntType, T.NArcs)
+    for a in arc_route
+        x_a[a] = 1
+    end
+
+    u = zeros(IntType, T.NNodes)
+    for i in 1:T.NNodes
+        u[best_route[i]] = i
+    end
+
+    y_a = zeros(IntType, T.NArcs)
+    y_r = zeros(IntType, T.NTriggers)
+    y_hat_r = zeros(IntType, T.NTriggers)
+
+    for t in 1:T.NTriggers
+        id_trigger = T.Trigger[t].trigger_arc_id
+        id_target  = T.Trigger[t].target_arc_id
+
+        if u[T.Arc[id_target].u] < u[T.Arc[id_trigger].u]
+            y_hat_r[t] = 1
+        end
+    end
+
+    for arc_target in 1:T.NArcs
+        if x_a[arc_target] != 1
+            continue  # arco target não está na solução
+        end
+
+        triggers_for_target = filter(t -> T.Trigger[t].target_arc_id == arc_target, 1:T.NTriggers)
+
+        best_t = nothing
+        best_pos = -1
+        for t in triggers_for_target
+            id_trigger = T.Trigger[t].trigger_arc_id
+
+            if x_a[id_trigger] == 1 && y_hat_r[t] == 0
+                u_pos = u[T.Arc[id_trigger].u]
+                if u_pos > best_pos
+                    best_pos = u_pos
+                    best_t = t
+                end
+            end
+        end
+
+        if best_t !== nothing
+            y_r[best_t] = 1
+        end
+    end
+
+    for a in 1:T.NArcs
+        if x_a[a] == 1 && all(t -> !(T.Trigger[t].target_arc_id == a && y_r[t] == 1), 1:T.NTriggers)
+            y_a[a] = 1
+        end
+    end
+
+    return best_cost, x_a, y_a, y_r, y_hat_r, u
 end
+
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     # This routine only changes the fields
@@ -447,27 +552,22 @@ end
 
 
 function TriggerArcTSP_ilp(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_ilp
-    # lb_ilp
-    # ub_ilp
-    # ub_ilp_arcs
-    # nn_ilp   
+    #Construir função que valida se as restrições estão sendo respeitadas
     
     active_constraints = Dict(
         "R1" => true,
         "R2" => true,
-        "R3" => true,
-        "R4" => true, 
+        "R3" => true,# lazy constraint
+        "R4" => true, # lazy constraint
         "R5" => true,
         "R6" => true,
         "R7" => true,
-        "R8" => true, # lazy constraint
+        "R8" => false, # lazy constraint
         "R9" => false  # lazy constraint
     )
         
     model = Model(Gurobi.Optimizer)    
-    Build_TATSP_Base_Model(model, T, active_constraints)
+    Build_TATSP_Base_Model(model, T, false, active_constraints)
     if verbose_mode
         println("Model:", model)    
     end
@@ -506,16 +606,16 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
 
         for t1 in 1:T.NTriggers
             #R8
-            # trigger1_id = T.Trigger[t1].trigger_arc_id
-            # target_id  = T.Trigger[t1].target_arc_id
+            trigger1_id = T.Trigger[t1].trigger_arc_id
+            target_id  = T.Trigger[t1].target_arc_id
 
-            # rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t1]
+            rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t1]
 
-            # if x_a[trigger1_id] > rhs + epsilon # violação da restrição
-            #     R8 = @build_constraint(model[:x_a][trigger1_id] <= (1 - model[:x_a][target_id]) + (1 - model[:y_a][target_id]) + model[:y_hat_r][t1])
-            #     MOI.submit(model, MOI.LazyConstraint(cb_data), R8)
-            #     cuts_added += 1
-            # end
+            if x_a[trigger1_id] > rhs + epsilon # violação da restrição
+                R8 = @build_constraint(model[:x_a][trigger1_id] <= (1 - model[:x_a][target_id]) + (1 - model[:y_a][target_id]) + model[:y_hat_r][t1])
+                MOI.submit(model, MOI.LazyConstraint(cb_data), R8)
+                cuts_added += 1
+            end
 
             for t2 in (t1+1):T.NTriggers
                 #R9
@@ -559,16 +659,22 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         return
     end  
     
-    function Primal_Heuristic_Callback(model, T)
+    function Primal_Heuristic_Callback(cb_data)
         x_a_current = callback_value.(cb_data, model[:x_a])
+        # println(x_a_current)
 
-        cost, x_a_new, y_a, y_r, y_hat_r, u = Get_Feasible_Solution_From_LB(T, x_val)
+        cost, x_a_new, y_a, y_r, y_hat_r, u = Apply_2_OPT_Heuristic(T, x_a_current)
 
         if cost < Inf
-            MOI.submit(model, MOI.HeuristicSolution(cb_data),
+            println("Heuristic found solution of cost $cost")
+            ValidateConstraints(T, x_a_new, y_a, y_r, y_hat_r, u)
+            
+            status = MOI.submit(model, MOI.HeuristicSolution(cb_data),
                 [model[:x_a]; model[:y_a]; model[:y_r]; model[:y_hat_r]; model[:u]],
                 [x_a_new; y_a; y_r; y_hat_r; u]
             )
+
+            println("Status of the solution: $status")
         end
 
         return
@@ -576,7 +682,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         
     
     set_attribute(model, MOI.LazyConstraintCallback(), Cutting_Planes_Callback)    
-    # set_attribute(model, MOI.HeuristicCallback(), Primal_Heuristic_Callback)
+    set_attribute(model, MOI.HeuristicCallback(), Primal_Heuristic_Callback)
 
     set_time_limit_sec(model, T.maxtime_ilp)
     
