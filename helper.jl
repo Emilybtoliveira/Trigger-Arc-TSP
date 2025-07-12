@@ -125,3 +125,103 @@ function BuildGreedyRouteFromFractionalSolution(T::TriggerArcTSP, x_frac::Vector
     return route
 end
 
+function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
+    ε = 1e-4  # tolerância
+
+    # 1. Verifica R1: número de arcos na solução
+    if abs(sum(x_a) - T.NNodes) > ε
+        println("❌ R1 violada: sum(x_a) = $(sum(x_a)) ≠ $(T.NNodes)")
+        
+    end
+
+    # 2. Verifica R2: ordem MTZ
+    for arc in 1:T.NArcs
+        u_i = T.Arc[arc].u
+        v_i = T.Arc[arc].v
+        if v_i == 1  # ignora MTZ com v=1
+            continue
+        end
+        if x_a[arc] > 1 - ε && !(u[u_i] + 1 <= u[v_i] + ε)
+            println("❌ R2 violada para arco $arc: u[$u_i]+1 = $(u[u_i]+1) > u[$v_i] = $(u[v_i])")
+            
+        end
+    end
+
+    # 3. Verifica R3: conservação de fluxo
+    in_deg = zeros(Float64, T.NNodes)
+    out_deg = zeros(Float64, T.NNodes)
+    for arc in 1:T.NArcs
+        u_i = T.Arc[arc].u
+        v_i = T.Arc[arc].v
+        out_deg[u_i] += x_a[arc]
+        in_deg[v_i]  += x_a[arc]
+    end
+    for i in 1:T.NNodes
+        if abs(in_deg[i] - 1) > 0
+            println("❌ R3_in violada no nó $i: in_deg = $(in_deg[i])")
+            
+        end
+        if abs(out_deg[i] - 1) > 0
+            println("❌ R3_out violada no nó $i: out_deg = $(out_deg[i])")
+            
+        end
+    end
+
+    # 4. Verifica R4: x_a = y_a + ∑y_r
+    for arc in 1:T.NArcs
+        related_triggers = filter(t -> T.Trigger[t].target_arc_id == arc, 1:T.NTriggers)
+        
+        y_sum = y_a[arc] + sum(y_r[t] for t in related_triggers; init = 0.0)
+        if abs(x_a[arc] - y_sum) > 0
+            println("❌ R4 violada para arco $arc: x = $(x_a[arc]), y_sum = $y_sum")
+            
+        end
+    end
+
+    # 5. Verifica R5–R9: por trigger
+    for t in 1:T.NTriggers
+        trigger_id = T.Trigger[t].trigger_arc_id
+        target_id  = T.Trigger[t].target_arc_id
+        u_trigger = T.Arc[trigger_id].u
+        u_target  = T.Arc[target_id].u
+        
+        # R5
+        if y_r[t] > x_a[trigger_id]
+            println("❌ R5 violada: y_r[$t] > x_a[trigger] = $(x_a[trigger_id])")
+            
+        end
+
+        # R6
+        if !(u[u_trigger] + 1 <= u[u_target] + T.NNodes * (1 - y_r[t]))
+            println("❌ R6 violada: trigger $t, u_trigger = $(u[u_trigger]), u_target = $(u[u_target]), y_r = $(y_r[t])")
+            
+        end
+
+        # R7
+        if !(u[u_target] + 1 <= u[u_trigger] + T.NNodes * (1 - y_hat_r[t]))
+            println("❌ R7 violada: trigger $t, x_a $(x_a[target_id]), u_target = $(u[u_target]), u_trigger = $(u[u_trigger]), y_hat_r = $(y_hat_r[t])")
+            
+        end
+
+        # R8
+        lhs = x_a[trigger_id]
+        rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t]
+        if lhs > rhs
+            println("❌ R8 violada: trigger $t, lhs = $lhs, rhs = $rhs")                    
+        end
+
+        # R9: múltiplos triggers para o mesmo target
+        for t2 in (t+1):T.NTriggers
+            if T.Trigger[t2].target_arc_id == target_id
+                trigger2_id = T.Trigger[t2].trigger_arc_id
+                u1 = u[T.Arc[trigger_id].u]
+                u2 = u[T.Arc[trigger2_id].u]
+                lhs = u2 - T.NNodes * y_hat_r[t2]
+                rhs = u1 + T.NNodes * (2 - y_r[t] - x_a[trigger2_id]) - 1
+                if lhs > rhs
+                    println("❌ R9 violada entre triggers $t e $t2")                            
+                end
+            end
+        end
+    end
+end
