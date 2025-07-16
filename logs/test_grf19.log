@@ -1,0 +1,6 @@
+RA, InputFile, Path, Dia/Hora, NNodes, NArcs, NTriggers, Routine, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+291111,grf19.txt,instances/instances_release_1/grf19.txt,2025-07-15T15:39:08.701,20,300,5708,ilp,maxtime_ilp,120,time_ilp,111.06594109535217,lb_ilp,44.42,ub_ilp,44.42,nn_ilp,4327,
+291111,grf19.txt,instances/instances_release_1/grf19.txt,2025-07-15T15:55:24.394,20,300,5708,lb_lp,maxtime_lb_lp,120,time_lb_lp,2.3160719871520996,lb_lp,34.54833333333333,
+291111,grf19.txt,instances/instances_release_1/grf19.txt,2025-07-15T17:20:10.138,20,300,5708,lb_rlxlag,maxtime_lb_rlxlag,30,time_lb_rlxlag,1.1136338710784912,lb_rlxlag,40.729999920273016,
+291111,grf19.txt,instances/instances_release_1/grf19.txt,2025-07-15T17:21:12.105,20,300,5708,ub_rlxlag,maxtime_ub_rlxlag,60.0,time_ub_rlxlag,61.849026918411255,ub_rlxlag,44.870000000000005,
+291111,grf19.txt,instances/instances_release_1/grf19.txt,2025-07-15T21:07:41.799,20,300,5708,ilp_b&c,maxtime_ilp,120,time_ilp,51.79610514640808,lb_ilp,44.42,ub_ilp,44.42,nn_ilp,2653,

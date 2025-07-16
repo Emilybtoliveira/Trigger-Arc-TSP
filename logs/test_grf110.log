@@ -1,0 +1,6 @@
+RA, InputFile, Path, Dia/Hora, NNodes, NArcs, NTriggers, Routine, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+291111,grf110.txt,instances/instances_release_2/grf110.txt,2025-07-15T15:22:53.174,37,222,6860,ilp,maxtime_ilp,120,time_ilp,120.07780003547668,lb_ilp,33.45000000000004,ub_ilp,38.489999999999995,nn_ilp,1,
+291111,grf110.txt,instances/instances_release_2/grf110.txt,2025-07-15T15:58:25.037,37,222,6860,lb_lp,maxtime_lb_lp,120,time_lb_lp,3.1210858821868896,lb_lp,33.41666666666666,
+291111,grf110.txt,instances/instances_release_2/grf110.txt,2025-07-15T17:07:43.864,37,222,6860,lb_rlxlag,maxtime_lb_rlxlag,30,time_lb_rlxlag,30.00828194618225,lb_rlxlag,33.63,
+291111,grf110.txt,instances/instances_release_2/grf110.txt,2025-07-15T17:08:46.581,37,222,6860,ub_rlxlag,maxtime_ub_rlxlag,60.0,time_ub_rlxlag,62.586483001708984,ub_rlxlag,36.0,
+291111,grf110.txt,instances/instances_release_2/grf110.txt,2025-07-15T21:35:45.501,37,222,6860,ilp_b&c,maxtime_ilp,120,time_ilp,120.12060499191284,lb_ilp,33.46,ub_ilp,35.550000000000004,nn_ilp,2368,

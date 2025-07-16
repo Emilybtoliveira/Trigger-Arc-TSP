@@ -1,0 +1,6 @@
+RA, InputFile, Path, Dia/Hora, NNodes, NArcs, NTriggers, Routine, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
+291111,inst-slide8.txt,instances/inst-slide8.txt,2025-07-15T15:48:01.232,5,8,5,ilp,maxtime_ilp,120,time_ilp,0.0006678104400634766,lb_ilp,62.0,ub_ilp,62.0,nn_ilp,0,
+291111,inst-slide8.txt,instances/inst-slide8.txt,2025-07-15T15:53:05.498,5,8,5,lb_lp,maxtime_lb_lp,120,time_lb_lp,0.0025069713592529297,lb_lp,47.5,
+291111,inst-slide8.txt,instances/inst-slide8.txt,2025-07-15T17:29:10.609,5,8,5,lb_rlxlag,maxtime_lb_rlxlag,30,time_lb_rlxlag,0.0004119873046875,lb_rlxlag,44.0,
+291111,inst-slide8.txt,instances/inst-slide8.txt,2025-07-15T17:30:10.675,5,8,5,ub_rlxlag,maxtime_ub_rlxlag,60.0,time_ub_rlxlag,60.000403881073,ub_rlxlag,62.0,
+291111,inst-slide8.txt,instances/inst-slide8.txt,2025-07-15T20:59:51.343,5,8,5,ilp_b&c,maxtime_ilp,120,time_ilp,0.40875911712646484,lb_ilp,62.0,ub_ilp,62.0,nn_ilp,1,
