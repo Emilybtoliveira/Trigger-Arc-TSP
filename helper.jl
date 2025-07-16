@@ -130,7 +130,7 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
 
     # 1. Verifica R1: número de arcos na solução
     if abs(sum(x_a) - T.NNodes) > ε
-        println("❌ R1 violada: sum(x_a) = $(sum(x_a)) ≠ $(T.NNodes)")
+        println("R1 violada: sum(x_a) = $(sum(x_a)) ≠ $(T.NNodes)")
         
     end
 
@@ -142,7 +142,7 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
             continue
         end
         if x_a[arc] > 1 - ε && !(u[u_i] + 1 <= u[v_i] + ε)
-            println("❌ R2 violada para arco $arc: u[$u_i]+1 = $(u[u_i]+1) > u[$v_i] = $(u[v_i])")
+            println("R2 violada para arco $arc: u[$u_i]+1 = $(u[u_i]+1) > u[$v_i] = $(u[v_i])")
             
         end
     end
@@ -158,11 +158,11 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
     end
     for i in 1:T.NNodes
         if abs(in_deg[i] - 1) > 0
-            println("❌ R3_in violada no nó $i: in_deg = $(in_deg[i])")
+            println("R3_in violada no nó $i: in_deg = $(in_deg[i])")
             
         end
         if abs(out_deg[i] - 1) > 0
-            println("❌ R3_out violada no nó $i: out_deg = $(out_deg[i])")
+            println("R3_out violada no nó $i: out_deg = $(out_deg[i])")
             
         end
     end
@@ -173,7 +173,7 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
         
         y_sum = y_a[arc] + sum(y_r[t] for t in related_triggers; init = 0.0)
         if abs(x_a[arc] - y_sum) > 0
-            println("❌ R4 violada para arco $arc: x = $(x_a[arc]), y_sum = $y_sum")
+            println("R4 violada para arco $arc: x = $(x_a[arc]), y_sum = $y_sum")
             
         end
     end
@@ -187,19 +187,19 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
         
         # R5
         if y_r[t] > x_a[trigger_id]
-            println("❌ R5 violada: y_r[$t] > x_a[trigger] = $(x_a[trigger_id])")
+            println("R5 violada: y_r[$t] > x_a[trigger] = $(x_a[trigger_id])")
             
         end
 
         # R6
         if !(u[u_trigger] + 1 <= u[u_target] + T.NNodes * (1 - y_r[t]))
-            println("❌ R6 violada: trigger $t, u_trigger = $(u[u_trigger]), u_target = $(u[u_target]), y_r = $(y_r[t])")
+            println("R6 violada: trigger $t, u_trigger = $(u[u_trigger]), u_target = $(u[u_target]), y_r = $(y_r[t])")
             
         end
 
         # R7
         if !(u[u_target] + 1 <= u[u_trigger] + T.NNodes * (1 - y_hat_r[t]))
-            println("❌ R7 violada: trigger $t, x_a $(x_a[target_id]), u_target = $(u[u_target]), u_trigger = $(u[u_trigger]), y_hat_r = $(y_hat_r[t])")
+            println("R7 violada: trigger $t, x_a $(x_a[target_id]), u_target = $(u[u_target]), u_trigger = $(u[u_trigger]), y_hat_r = $(y_hat_r[t])")
             
         end
 
@@ -207,7 +207,7 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
         lhs = x_a[trigger_id]
         rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t]
         if lhs > rhs
-            println("❌ R8 violada: trigger $t, lhs = $lhs, rhs = $rhs")                    
+            println("R8 violada: trigger $t, lhs = $lhs, rhs = $rhs")                    
         end
 
         # R9: múltiplos triggers para o mesmo target
@@ -219,7 +219,7 @@ function ValidateConstraints(T, x_a, y_a, y_r, y_hat_r, u)
                 lhs = u2 - T.NNodes * y_hat_r[t2]
                 rhs = u1 + T.NNodes * (2 - y_r[t] - x_a[trigger2_id]) - 1
                 if lhs > rhs
-                    println("❌ R9 violada entre triggers $t e $t2")                            
+                    println("R9 violada entre triggers $t e $t2")                            
                 end
             end
         end

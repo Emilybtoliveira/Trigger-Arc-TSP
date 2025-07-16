@@ -13,6 +13,7 @@
 using JuMP
 using Gurobi
 using DataStructures
+using Plots
 
 function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP, relaxed_vars::Bool=false, active_constraints::Dict{String,Bool}=Dict{String,Bool}(), default_objective::Bool=true)  
     if !relaxed_vars 
@@ -299,10 +300,36 @@ function Apply_2_OPT_Heuristic(T::TriggerArcTSP, lb_sol::Vector{FloatType})
     return best_cost, x_a, y_a, y_r, y_hat_r, u
 end
 
+function Plot_Bounds(T::TriggerArcTSP, lb_values::Vector{FloatType}, ub_values::Vector{FloatType}, iter_values::Vector{IntType})
+    plot(iter_values, lb_values;
+        label = "Lower Bound",
+        xlabel = "Iteração",
+        ylabel = "Bound",
+        title = "Evolução dos Limitantes na Heurística Lagrangiana",
+        lw = 2,
+        color = :blue,
+        marker = :circle,        
+        markersize = 4,          
+        legend = :bottomright    
+    )
+
+    plot!(iter_values, ub_values;
+        label = "Upper Bound",
+        lw = 2,
+        color = :red,
+        marker = :square,          
+        markersize = 4
+    )
+
+    instance_name = splitext(basename(T.inputfilename))[1]
+    savefig("./figs/rlxlag_$(instance_name).png")
+end
+
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     model = Model(Gurobi.Optimizer)    
-
+    
+    #TODO: substituir por relax_integrality
     Build_TATSP_Base_Model(model, T, true)
     if verbose_mode
         println("Model:", model)    
@@ -343,19 +370,96 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     println("UB ILP arcs: ", T.ub_lp_arcs)
 end
 
-# --------------------------------------------------------------
 function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
     # This routine only changes the fields
     #
     # time_ub_lp
     # ub_lp
     # ub_lp_arcs
-    # Ideia: Fixação de variáveis
     
-    println("The function TriggerArcTSP_ub_lp is not implemented yet.")
-end
+    #TODO: Chamar a funcao de cima
+    model = Model(Gurobi.Optimizer)
+    Build_TATSP_Base_Model(model, T)
+    relax_integrality(model)
+    # println("Built the model with $(num_variables(model)) variables and $(num_constraints(model, count_variable_in_set_constraints = false)) constraints.")
 
+    # println(model)
+    set_optimizer_attribute(model, "OutputFlag", 0)
+    set_time_limit_sec(model, 10) #10s para resolver cada modelo
+    optimize!(model)
+    
+    if !has_values(model)  
+        println("Could not solve relaxation within time limit.")
+    end
+    
+    println("Relaxation solution: $(objective_value(model))")
+
+    proximity(val) = 1.0 - min(val, 1.0 - val)
+
+    x_lp = value.(model[:x_a])
+    best_UB = Inf
+    iter = 1    
+    fractional_indices = [i for i in 1:T.NArcs if x_lp[i] > 1e-5 && x_lp[i] < 1-1e-5]
+    sorted_arcs = sort(fractional_indices,
+        by = i -> proximity(x_lp[i]),
+        rev = true
+    )
+    
+    start_time = time()
+    while !isempty(sorted_arcs) && (time() - start_time) < T.maxtime_ub_rlxlag        
+        arc_to_fix = first(sorted_arcs)
+        println("Iteration $iter: Fixing variable x_a[$arc_to_fix] = $(x_lp[arc_to_fix])")
+
+        if x_lp[arc_to_fix] > 0.5
+            fix(model[:x_a][arc_to_fix], 1.0; force = true)
+        else
+            fix(model[:x_a][arc_to_fix], 0.0; force = true)
+        end
+
+        optimize!(model)
+
+        if has_values(model)
+            obj = objective_value(model)
+            println("Heuristic found solution of cost: $obj")
+            
+            if obj < best_UB
+                best_UB = obj
+            end
+
+            x_lp = value.(model[:x_a]) 
+            
+            fractional_indices = [i for i in 1:T.NArcs if x_lp[i] > 1e-5 && x_lp[i] < 1-1e-5]
+            sorted_arcs = sort(fractional_indices,
+                by = i -> proximity(x_lp[i]),
+                rev = true
+            )
+        else
+            println(primal_status(model))  
+            unfix(model[:x_a][arc_to_fix]) # tentar 
+            # remover o elemento de sorted_arcs
+            sorted_arcs = deleteat!(sorted_arcs, 1)
+            # println(sorted_arcs)
+        end
+
+        iter += 1
+    end
+
+    #se ainda for fracionario, roda a heuristica de arredondamento
+    new_ub, new_x, _, _, _, _ = Apply_2_OPT_Heuristic(T, x_lp)
+
+    if new_ub <  best_UB; best_UB = new_ub; x_lp = new_x end 
+
+    T.ub_lp = best_UB
+    T.ub_lp_arcs = x_lp
+    T.time_ub_lp = time() - start_time
+    
+    println("Time LP: ", T.time_ub_lp)
+    println("UB LP: ", T.ub_lp)  
+    println("UB LP arcs: ", T.ub_lp_arcs)
+    VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)    
+end
 # --------------------------------------------------------------
+
 function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP, 
                                  model = nothing,
                                  lambda::Vector{FloatType} = zeros(T.NTriggers), 
@@ -369,6 +473,15 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP,
         Build_TATSP_Base_Model(model, T, false, active_constraints, false)
     end 
     
+    # Init gama with existing triggers if empty
+    if isempty(gama)
+        for t1 in 1:T.NTriggers, t2 in t1+1:T.NTriggers
+            if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+                gama[(t1,t2)] = 0.0           
+            end
+        end
+    end
+
     set_optimizer_attribute(model, "OutputFlag", 0)
     objective_function = Build_lagrangian_objective(model, T, lambda, gama, delta, mu)
     set_objective(model, MIN_SENSE, objective_function)
@@ -398,14 +511,14 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP,
     return T.lb_rlxlag
 end
 
-# --------------------------------------------------------------
 function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
-    # Heuristica de Relaxação Lagraniana: Pega a solução relaxada, encontra uma solução viavel. 
-    # Aplica o subgradiente pra ajustar os multiplicadores de Lagrange.
-
-    step_size = 0.08
+    step_size = 0.001
     theta = step_size
     k = 1
+
+    lb_values = FloatType[]
+    ub_values = FloatType[]
+    iter_values = IntType[]
     
     #Initialize data structures
     UB = Inf 
@@ -428,7 +541,6 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         end
     end
 
-    # Use the same model for all iterations
     model = Model(Gurobi.Optimizer)    
     active_constraints = Get_Active_Constraints_For_lb_rlxlag()
     Build_TATSP_Base_Model(model, T, false, active_constraints, false)
@@ -436,8 +548,6 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     start_time = time()
 
     while (time() - start_time) < T.maxtime_ub_rlxlag
-        
-        # Finds lower bound with new values of the Lagrange multipliers
         LB = TriggerArcTSP_lb_rlxlag(T, model, lambda, gama, delta, mu)
 
         x_a = model[:x_a]
@@ -445,7 +555,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         y_r = model[:y_r]
         y_hat_r = model[:y_hat_r]
         u = model[:u]
-        
+
         arcs_LB = [value(x_a[i]) for i in 1:T.NArcs]
         
         if LB > best_LB && LB <= best_UB
@@ -453,15 +563,17 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
             arcs_best_LB = arcs_LB
         end  
         
-        # Finds an upper bound by transforming the lower bound solution into a feasible solution
         UB, arcs_UB, _, _, _, _ = Apply_2_OPT_Heuristic(T, arcs_LB)
         if UB < best_UB
             best_UB = UB
             arcs_best_UB = arcs_UB
         end
         println("Iteration: $k, LB: $LB, Best LB: $best_LB, UB:$UB, Best UB: $best_UB, Theta: $theta")
+        
+        push!(lb_values, LB)
+        push!(ub_values, UB)
+        push!(iter_values, k)
 
-        #Computes violations of the constraints in the lower bound solution
         violations_R6 = zeros(T.NTriggers)
         violations_R7 = zeros(T.NTriggers)
         for t in 1:T.NTriggers
@@ -501,9 +613,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         norm_sq = sum(v^2 for v in violations)
         
         if isfinite(LB) && isfinite(best_UB) && norm_sq > 1e-8
-            theta = step_size * (best_UB - LB) / norm_sq
-        else
-            theta = step_size
+            theta = (step_size * (best_UB - LB)) / norm_sq
         end
 
         k += 1
@@ -513,9 +623,15 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     T.time_ub_rlxlag =  time() - start_time
     T.ub_rlxlag = best_UB
     T.ub_rlxlag_arcs = arcs_best_UB
-end
 
+    println("Time rlxlab: ", T.time_ub_rlxlag)
+    println("UB rlxlab: ", T.ub_rlxlag)
+    println("LB rlxlab: ", best_LB)
+
+    Plot_Bounds(T, lb_values, ub_values, iter_values)
+end
 # --------------------------------------------------------------
+
 function TriggerArcTSP_lb_colgen(T::TriggerArcTSP)
     # This routine only changes the fields
     # time_lb_colgen
@@ -523,7 +639,6 @@ function TriggerArcTSP_lb_colgen(T::TriggerArcTSP)
     println("The function TriggerArcTSP_lb_colgen is not implemented yet.")
 end
 
-# --------------------------------------------------------------
 function TriggerArcTSP_ub_colgen(T::TriggerArcTSP)
     # This routine only changes the fields
     # time_ub_colgen
@@ -531,17 +646,14 @@ function TriggerArcTSP_ub_colgen(T::TriggerArcTSP)
     # ub_colgen_arcs
     println("The function TriggerArcTSP_ub_colgen is not implemented yet.")
 end
-
 # --------------------------------------------------------------
 
-
 function TriggerArcTSP_ilp(T::TriggerArcTSP)
-    #Construir função que valida se as restrições estão sendo respeitadas
-    
+
     active_constraints = Dict(
         "R1" => true,
         "R2" => true,
-        "R3" => true,# lazy constraint
+        "R3" => true, # lazy constraint
         "R4" => true, # lazy constraint
         "R5" => true,
         "R6" => true,
@@ -575,69 +687,76 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         epsilon = 1e-5
         cuts_added = 0
         
-        # for arc in 1:T.NArcs
-        #     if x_a[arc] >= (1 - epsilon) #arco selecionado
-        #         arc_triggers = filter(r -> T.Trigger[r].target_arc_id == arc, 1:T.NTriggers)
-        #         y_sum = y_a[arc] + sum(y_r[r] for r in arc_triggers)
-        #         if y_sum < 1 - epsilon
-        #             #R4: ou y_a ou sum(y_r) devem ser 1 se o arco a está na solução
-        #             R4 = @build_constraint(model[:y_a][arc] + sum(model[:y_r][r] for r in arc_triggers) >= model[:x_a][arc])
-        #             MOI.submit(model, MOI.LazyConstraint(cb_data), R4)
-        #             cuts_added += 1
-        #         end
-        #     end
-        # end
-
-        for t1 in 1:T.NTriggers
-            #R8
-            trigger1_id = T.Trigger[t1].trigger_arc_id
-            target_id  = T.Trigger[t1].target_arc_id
-
-            rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t1]
-
-            if x_a[trigger1_id] > rhs + epsilon # violação da restrição
-                R8 = @build_constraint(model[:x_a][trigger1_id] <= (1 - model[:x_a][target_id]) + (1 - model[:y_a][target_id]) + model[:y_hat_r][t1])
-                MOI.submit(model, MOI.LazyConstraint(cb_data), R8)
-                cuts_added += 1
-            end
-
-            for t2 in (t1+1):T.NTriggers
-                #R9
-                if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
-                    u1 = u[T.Arc[T.Trigger[t1].trigger_arc_id].u]
-                    u2 = u[T.Arc[T.Trigger[t2].trigger_arc_id].u]
-
-                    if u2 - (T.NNodes * y_hat_r[t2]) > u1 + (T.NNodes * (2 - y_r[t1] - x_a[T.Trigger[t2].trigger_arc_id])) - 1 + epsilon  # violação da restrição
-                        R9 = @build_constraint(model[:u][T.Arc[T.Trigger[t2].trigger_arc_id].u] - (T.NNodes * model[:y_hat_r][t2]) <= 
-                                                model[:u][T.Arc[T.Trigger[t1].trigger_arc_id].u] + T.NNodes * (2 - model[:y_r][t1] - model[:x_a][T.Trigger[t2].trigger_arc_id]) - 1)
-                        MOI.submit(model, MOI.LazyConstraint(cb_data), R9)
+        if (!active_constraints["R4"])
+            for arc in 1:T.NArcs
+                if x_a[arc] >= (1 - epsilon) #arco selecionado
+                    arc_triggers = filter(r -> T.Trigger[r].target_arc_id == arc, 1:T.NTriggers)
+                    y_sum = y_a[arc] + sum(y_r[r] for r in arc_triggers; init = 0.0)
+                    if y_sum < 1 - epsilon
+                        #R4: ou y_a ou sum(y_r) devem ser 1 se o arco a está na solução
+                        R4 = @build_constraint(model[:y_a][arc] + sum(model[:y_r][r] for r in arc_triggers) >= model[:x_a][arc])
+                        MOI.submit(model, MOI.LazyConstraint(cb_data), R4)
                         cuts_added += 1
                     end
                 end
             end
         end
 
-        # (InArcs, OutArcs) = Build_In_Out_Arcs(T)
+        if (!active_constraints["R8"] && !active_constraints["R9"])
+            for t1 in 1:T.NTriggers
+                #R8
+                trigger1_id = T.Trigger[t1].trigger_arc_id
+                target_id  = T.Trigger[t1].target_arc_id
 
-        # for i in 1:T.NNodes
-        #     in_arcs_i = InArcs[i]  
-        #     out_arcs_i = OutArcs[i]
+                rhs = (1 - x_a[target_id]) + (1 - y_a[target_id]) + y_hat_r[t1]
 
-        #     sum_in = sum(x_a[a] for a in in_arcs_i)
-        #     sum_out = sum(x_a[a] for a in out_arcs_i)
+                if x_a[trigger1_id] > rhs + epsilon # violação da restrição
+                    R8 = @build_constraint(model[:x_a][trigger1_id] <= (1 - model[:x_a][target_id]) + (1 - model[:y_a][target_id]) + model[:y_hat_r][t1])
+                    MOI.submit(model, MOI.LazyConstraint(cb_data), R8)
+                    cuts_added += 1
+                end
 
-        #     if abs(sum_in - 1) > epsilon
-        #         R3_1 = @build_constraint((sum(model[:x_a][a] for a in in_arcs_i)) == 1)
-        #         MOI.submit(model, MOI.LazyConstraint(cb_data), R3_1)
-        #         cuts_added += 1
-        #     end
+                for t2 in (t1+1):T.NTriggers
+                    #R9
+                    if T.Trigger[t1].target_arc_id == T.Trigger[t2].target_arc_id
+                        u1 = u[T.Arc[T.Trigger[t1].trigger_arc_id].u]
+                        u2 = u[T.Arc[T.Trigger[t2].trigger_arc_id].u]
 
-        #     if abs(sum_out - 1) > epsilon
-        #         R3_2 = @build_constraint((sum(model[:x_a][a] for a in out_arcs_i)) == 1)
-        #         MOI.submit(model, MOI.LazyConstraint(cb_data), R3_2)
-        #         cuts_added += 1
-        #     end
-        # end
+                        if u2 - (T.NNodes * y_hat_r[t2]) > u1 + (T.NNodes * (2 - y_r[t1] - x_a[T.Trigger[t2].trigger_arc_id])) - 1 + epsilon  # violação da restrição
+                            R9 = @build_constraint(model[:u][T.Arc[T.Trigger[t2].trigger_arc_id].u] - (T.NNodes * model[:y_hat_r][t2]) <= 
+                                                    model[:u][T.Arc[T.Trigger[t1].trigger_arc_id].u] + T.NNodes * (2 - model[:y_r][t1] - model[:x_a][T.Trigger[t2].trigger_arc_id]) - 1)
+                            MOI.submit(model, MOI.LazyConstraint(cb_data), R9)
+                            cuts_added += 1
+                        end
+                    end
+                end
+            end
+        end
+
+        if (!active_constraints["R3"])
+        
+            (InArcs, OutArcs) = Build_In_Out_Arcs(T)
+
+            for i in 1:T.NNodes
+                in_arcs_i = InArcs[i]  
+                out_arcs_i = OutArcs[i]
+
+                sum_in = sum(x_a[a] for a in in_arcs_i)
+                sum_out = sum(x_a[a] for a in out_arcs_i)
+
+                if abs(sum_in - 1) > epsilon
+                    R3_1 = @build_constraint((sum(model[:x_a][a] for a in in_arcs_i)) == 1)
+                    MOI.submit(model, MOI.LazyConstraint(cb_data), R3_1)
+                    cuts_added += 1
+                end
+
+                if abs(sum_out - 1) > epsilon
+                    R3_2 = @build_constraint((sum(model[:x_a][a] for a in out_arcs_i)) == 1)
+                    MOI.submit(model, MOI.LazyConstraint(cb_data), R3_2)
+                    cuts_added += 1
+                end
+            end
+        end
 
         println("Added $cuts_added cuts.")
         return
@@ -650,7 +769,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         cost, x_a_new, y_a, y_r, y_hat_r, u = Apply_2_OPT_Heuristic(T, x_a_current)
 
         if cost < Inf
-            println("Heuristic found solution of cost $cost")
+            # println("Heuristic found solution of cost $cost")
             ValidateConstraints(T, x_a_new, y_a, y_r, y_hat_r, u)
             
             status = MOI.submit(model, MOI.HeuristicSolution(cb_data),
@@ -658,7 +777,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
                 [x_a_new; y_a; y_r; y_hat_r; u]
             )
 
-            println("Status of the solution: $status")
+            # println("Status of the solution: $status")
         end
 
         return
@@ -682,6 +801,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         T.time_ilp = solve_time(model)
         T.ub_ilp = objective_value(model)
         T.ub_ilp_arcs = [value(x_a[i]) for i in 1:T.NArcs]
+        T.nn_ilp =  node_count(model)
         gap = relative_gap(model)
         u = [value(u[i]) for i in 1:T.NNodes]
 
@@ -699,5 +819,6 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     println("LB ILP: ", T.lb_ilp)
     println("UB ILP: ", T.ub_ilp)  
     println("UB ILP arcs: ", T.ub_ilp_arcs)
+    println("Number of nodes: ", T.nn_ilp)
 end
 # --------------------------------------------------------------

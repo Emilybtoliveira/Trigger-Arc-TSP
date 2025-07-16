@@ -35,18 +35,18 @@ test:
 	@echo Execução de instância de teste:
 	julia --project=. trigger_arc_tsp.jl \
 			--inputfilename $(TEST_INSTANCE) \
-			--seednumber 1234 \
-			--maxtime_lb_lp 1010 \
-			--maxtime_lb_rlxlag 1020 \
-			--maxtime_lb_colgen 1030 \
-			--maxtime_ub_lp 1040 \
-			--maxtime_ub_rlxlag 1050 \
-			--maxtime_ub_colgen 1060 \
-			--maxtime_ilp 60 \
-			--ra 291111 \
+			--seednumber $(SEED_NUMBER) \
+			--maxtime_lb_lp $(MAXTIME_LB_LP) \
+			--maxtime_lb_rlxlag $(MAXTIME_LB_RLXLAG) \
+			--maxtime_lb_colgen $(MAXTIME_LB_COLGEN) \
+			--maxtime_ub_lp $(MAXTIME_UB_LP) \
+			--maxtime_ub_rlxlag $(MAXTIME_UB_RLXLAG) \
+			--maxtime_ub_colgen $(MAXTIME_UB_COLGEN) \
+			--maxtime_ilp $(MAXTIME_ILP) \
+			--ra $(RA_PARAM) \
 			--logfile trigger_arc_tsp.log
 
 # Regra 'clean': remove todos os arquivos de log gerados
 clean:
 	@echo "Removendo arquivos de log..."
-	rm -f $(INSTANCES)/logs/*.log
+	rm -f logs/*.log

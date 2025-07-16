@@ -57,6 +57,11 @@ function main()
 			ra,
 			logfilename)
 
+	if(T.NNodes == 0)
+		println("Instance is too big. Skiping...")
+		return
+	end
+
 	 # # O proximo trecho permite verificar se o arquivo lido esta armazenado
 	 # # corretamente. O trecho escreve os dados para um novo arquivo e
 	 # # compara com diff.
@@ -73,26 +78,26 @@ function main()
 
 	# print_instance(T)
 
-	# TriggerArcTSP_lb_lp(T)
+	#TriggerArcTSP_lb_lp(T)
 	#WriteLogFile(T,"lb_lp")
 	
 	# TriggerArcTSP_lb_rlxlag(T)
-	#WriteLogFile(T,"lb_rlxlag")
+	# WriteLogFile(T,"lb_rlxlag")
 	
 	# TriggerArcTSP_lb_colgen(T)
 	#WriteLogFile(T,"lb_colgen")
 	
 	# TriggerArcTSP_ub_lp(T)
-	#WriteLogFile(T,"ub_lp")
+	# WriteLogFile(T,"ub_lp")
 
-	TriggerArcTSP_ub_rlxlag(T)
-	#WriteLogFile(T,"ub_rlxlag")
+	# TriggerArcTSP_ub_rlxlag(T)
+	# WriteLogFile(T,"ub_rlxlag")
 
 	# TriggerArcTSP_ub_colgen(T)
 	#WriteLogFile(T,"ub_colgen")
 	
-	# TriggerArcTSP_ilp(T)
-	#WriteLogFile(T,"ilp")
+	TriggerArcTSP_ilp(T)
+	WriteLogFile(T,"ilp")
 
 	# Exemplo_PLI(T,10)
 end
