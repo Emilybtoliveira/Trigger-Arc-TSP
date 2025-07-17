@@ -162,6 +162,7 @@ mutable struct TriggerArcTSP
 
 	# Output info: other info interesting for the exact ILP algorithm
 	nn_ilp::IntType# Number of nodes used in the branch tree algorithm
+	ub_lp_fixed_vars::IntType
 
 	# User information
 	ra::IntType
@@ -218,6 +219,7 @@ mutable struct TriggerArcTSP
 			Vector{IntType}(), # set of arcs in the ub_colgen  solution starts by an empty vector.
 			Vector{IntType}(), # set of arcs in the ub_ilp     solution starts by an empty vector.
 			0,# default for nn_ilp, the number of branch and bound/cut tree
+			0,# default for ub_lp_fixed_vars
 			999999,# academic number
 			"",# logfilename
 		)
@@ -362,6 +364,7 @@ mutable struct TriggerArcTSP
 			_ub_rlxlag_arcs,
 			_ub_colgen_arcs,
 			_ub_ilp_arcs, 0,# default for nn_ilp
+			 0, # default for ub_lp_fixed_vars
 			_ra,# academic number
 			_logfilename)   # logfilename
 	end
@@ -739,6 +742,7 @@ function WriteLogFile(T::TriggerArcTSP, routine::String)
 		print(fp, "maxtime_ub_lp,", T.maxtime_ub_lp, ",")
 		print(fp, "time_ub_lp,", T.time_ub_lp, ",")
 		print(fp, "ub_lp,", T.ub_lp, ",")
+		print(fp, "ub_lp_fixed_vars,", T.ub_lp_fixed_vars, ",")
 		println(fp)
 	elseif (routine == "ub_rlxlag")
 		print(fp, "maxtime_ub_rlxlag,", T.maxtime_ub_rlxlag, ",")

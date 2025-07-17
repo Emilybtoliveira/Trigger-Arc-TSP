@@ -370,14 +370,8 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     println("UB ILP arcs: ", T.ub_lp_arcs)
 end
 
-function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
-    # This routine only changes the fields
-    #
-    # time_ub_lp
-    # ub_lp
-    # ub_lp_arcs
-    
-    #TODO: Chamar a funcao de cima
+function TriggerArcTSP_ub_lp(T::TriggerArcTSP) 
+    start_time = time()    
     model = Model(Gurobi.Optimizer)
     Build_TATSP_Base_Model(model, T)
     relax_integrality(model)
@@ -393,70 +387,56 @@ function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
     end
     
     println("Relaxation solution: $(objective_value(model))")
-
-    proximity(val) = 1.0 - min(val, 1.0 - val)
-
     x_lp = value.(model[:x_a])
-    best_UB = Inf
-    iter = 1    
-    fractional_indices = [i for i in 1:T.NArcs if x_lp[i] > 1e-5 && x_lp[i] < 1-1e-5]
-    sorted_arcs = sort(fractional_indices,
-        by = i -> proximity(x_lp[i]),
-        rev = true
-    )
-    
-    start_time = time()
-    while !isempty(sorted_arcs) && (time() - start_time) < T.maxtime_ub_rlxlag        
-        arc_to_fix = first(sorted_arcs)
-        println("Iteration $iter: Fixing variable x_a[$arc_to_fix] = $(x_lp[arc_to_fix])")
 
-        if x_lp[arc_to_fix] > 0.5
-            fix(model[:x_a][arc_to_fix], 1.0; force = true)
+    TriggerArcTSP_ub_rlxlag(T)
+    x_rlx_lag = T.ub_rlxlag_arcs 
+
+    fixed_vars = 0
+    for a in 1:T.NArcs
+        if x_lp[a] > 0.9999 && x_rlx_lag[a] > 0.9999
+            # println("Fixing x_a[$a] = 1")
+            fix(model[:x_a][a], 1.0; force=true)
+            fixed_vars += 1
+        elseif 1 - x_lp[a] > 0.9999 && 1 - x_rlx_lag[a] > 0.9999
+            # println("Fixing x_a[$a] = 0")
+            fix(model[:x_a][a], 0.0; force=true)
+            fixed_vars += 1
         else
-            fix(model[:x_a][arc_to_fix], 0.0; force = true)
+            set_binary(model[:x_a][a])
         end
-
-        optimize!(model)
-
-        if has_values(model)
-            obj = objective_value(model)
-            println("Heuristic found solution of cost: $obj")
-            
-            if obj < best_UB
-                best_UB = obj
-            end
-
-            x_lp = value.(model[:x_a]) 
-            
-            fractional_indices = [i for i in 1:T.NArcs if x_lp[i] > 1e-5 && x_lp[i] < 1-1e-5]
-            sorted_arcs = sort(fractional_indices,
-                by = i -> proximity(x_lp[i]),
-                rev = true
-            )
-        else
-            println(primal_status(model))  
-            unfix(model[:x_a][arc_to_fix]) # tentar 
-            # remover o elemento de sorted_arcs
-            sorted_arcs = deleteat!(sorted_arcs, 1)
-            # println(sorted_arcs)
-        end
-
-        iter += 1
     end
 
-    #se ainda for fracionario, roda a heuristica de arredondamento
-    new_ub, new_x, _, _, _, _ = Apply_2_OPT_Heuristic(T, x_lp)
+    T.ub_lp_fixed_vars = fixed_vars
+    for v in model[:y_a] set_binary(v) end
+    for v in model[:y_r] set_binary(v) end
+    for v in model[:y_hat_r] set_binary(v) end
+    for v in model[:u] set_integer(v) end
 
-    if new_ub <  best_UB; best_UB = new_ub; x_lp = new_x end 
+    set_time_limit_sec(model, 30) 
+    # set_optimizer_attribute(model, "OutputFlag", 1)
+    optimize!(model)
+    # println(primal_status(model))
 
-    T.ub_lp = best_UB
-    T.ub_lp_arcs = x_lp
-    T.time_ub_lp = time() - start_time
-    
+    if has_values(model)
+        T.ub_lp = objective_value(model)
+        T.ub_lp_arcs = value.(model[:x_a])
+        VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)    
+        
+        new_cost, new_route, _,_,_,_ =  Apply_2_OPT_Heuristic(T, T.ub_lp_arcs)
+        # println("2-opt cost: $new_cost")
+        
+        T.ub_lp = new_cost
+        T.ub_lp_arcs = new_route        
+        T.time_ub_lp = time() - start_time
+    else
+        println("No feasible solution found in RINS search.")
+    end        
+
     println("Time LP: ", T.time_ub_lp)
     println("UB LP: ", T.ub_lp)  
     println("UB LP arcs: ", T.ub_lp_arcs)
-    VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)    
+    println("Fixed variables: ", T.ub_lp_fixed_vars)
 end
 # --------------------------------------------------------------
 
@@ -568,8 +548,11 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
             best_UB = UB
             arcs_best_UB = arcs_UB
         end
-        println("Iteration: $k, LB: $LB, Best LB: $best_LB, UB:$UB, Best UB: $best_UB, Theta: $theta")
-        
+
+        if verbose_mode
+            println("Iteration: $k, LB: $LB, Best LB: $best_LB, UB:$UB, Best UB: $best_UB, Theta: $theta")
+        end
+
         push!(lb_values, LB)
         push!(ub_values, UB)
         push!(iter_values, k)
@@ -609,12 +592,12 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
         end
 
         # Updates the step size using Polyak's rule        
-        violations = [violations_R6...;violations_R7...;violations_R8...;values(violations_R9)...]
-        norm_sq = sum(v^2 for v in violations)
+        # violations = [violations_R6...;violations_R7...;violations_R8...;values(violations_R9)...]
+        # norm_sq = sum(v^2 for v in violations)
         
-        if isfinite(LB) && isfinite(best_UB) && norm_sq > 1e-8
-            theta = (step_size * (best_UB - LB)) / norm_sq
-        end
+        # if isfinite(LB) && isfinite(best_UB) && norm_sq > 1e-8
+        #     theta = (step_size * (best_UB - LB)) / norm_sq
+        # end
 
         k += 1
         # println("Elapsed time $(time() - start_time)")
@@ -628,7 +611,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     println("UB rlxlab: ", T.ub_rlxlag)
     println("LB rlxlab: ", best_LB)
 
-    Plot_Bounds(T, lb_values, ub_values, iter_values)
+    # Plot_Bounds(T, lb_values, ub_values, iter_values)
 end
 # --------------------------------------------------------------
 

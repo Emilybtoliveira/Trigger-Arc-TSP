@@ -1,6 +1,7 @@
 RA, InputFile, Path, Dia/Hora, NNodes, NArcs, NTriggers, Routine, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10
-291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-15T15:27:11.488,50,350,15168,ilp,maxtime_ilp,120,time_ilp,120.07366704940796,lb_ilp,-Inf,ub_ilp,Inf,nn_ilp,0,
+291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-16T14:39:12.320,50,350,15168,ilp,maxtime_ilp,600,time_ilp,600.1201539039612,lb_ilp,45.15000000000003,ub_ilp,53.099999999999994,nn_ilp,1,
 291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-15T15:59:10.261,50,350,15168,lb_lp,maxtime_lb_lp,120,time_lb_lp,20.09272789955139,lb_lp,45.1125,
 291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-15T17:11:06.738,50,350,15168,lb_rlxlag,maxtime_lb_rlxlag,30,time_lb_rlxlag,30.00393795967102,lb_rlxlag,45.61,
 291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-15T17:12:14.196,50,350,15168,ub_rlxlag,maxtime_ub_rlxlag,60.0,time_ub_rlxlag,67.15046191215515,ub_rlxlag,50.06000000000001,
 291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-15T21:40:03.697,50,350,15168,ilp_b&c,maxtime_ilp,120,time_ilp,120.03128504753113,lb_ilp,45.15000000000004,ub_ilp,49.92,nn_ilp,2209,
+291111,grf112.txt,instances/instances_release_2/grf112.txt,2025-07-17T16:28:22.316,50,350,15168,ub_lp,maxtime_ub_lp,30,time_ub_lp,0.0,ub_lp,Inf,ub_lp_fixed_vars,75,
