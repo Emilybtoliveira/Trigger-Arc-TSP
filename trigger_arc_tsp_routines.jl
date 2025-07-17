@@ -110,11 +110,6 @@ function Build_TATSP_Base_Model(model::JuMP.Model, T::TriggerArcTSP, relaxed_var
                     id_trigger_2 = trigger_2.trigger_arc_id                
                     u_trigger_2 = T.Arc[id_trigger_2].u
 
-                    #DEBUG
-                    # expr = u[u_trigger_2] - u[u_trigger] - (T.NNodes * y_hat_r[t2]) - (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1)
-                    # println(trigger, trigger_2)
-                    # println(expr)
-
                     #R9: Se dois triggers estão para o mesmo target, o último que aparece na rota é que deve estar ativo
                     @constraint(model, u[u_trigger_2] - (T.NNodes * y_hat_r[t2]) <= u[u_trigger] + (T.NNodes * (2 - y_r[t] - x_a[id_trigger_2]) - 1), base_name="R9_$(t)_$(t2)")
                 end
@@ -305,7 +300,7 @@ function Plot_Bounds(T::TriggerArcTSP, lb_values::Vector{FloatType}, ub_values::
         label = "Lower Bound",
         xlabel = "Iteração",
         ylabel = "Bound",
-        title = "Evolução dos Limitantes na Heurística Lagrangiana",
+        # title = "Evolução dos Limitantes na Heurística Lagrangiana",
         lw = 2,
         color = :blue,
         marker = :circle,        
@@ -327,9 +322,10 @@ end
 
 # --------------------------------------------------------------
 function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
+    println("===== Running TriggerArcTSP_lb_lp...")
+
     model = Model(Gurobi.Optimizer)    
     
-    #TODO: substituir por relax_integrality
     Build_TATSP_Base_Model(model, T, true)
     if verbose_mode
         println("Model:", model)    
@@ -341,7 +337,7 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
     # set_objective_sense(model, FEASIBILITY_SENSE)
     optimize!(model)
     
-    println(primal_status(model))    
+    # println(primal_status(model))    
     
     if has_values(model)    
         x_a = model[:x_a]
@@ -354,8 +350,8 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
         gap = relative_gap(model)
         u = [value(u[i]) for i in 1:T.NNodes]
 
-        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)
-        println("Result of feasibility evaluation: $is_feasible")
+        # is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_lp, T.ub_lp_arcs)
+        # println("Result of feasibility evaluation: $is_feasible")
     else
         println("No solution was found within time limit.")
         T.time_lb_lp = solve_time(model)
@@ -364,13 +360,17 @@ function TriggerArcTSP_lb_lp(T::TriggerArcTSP)
  
     
     println("Optimality Gap: ", gap)
-    println("Time ILP: ", T.time_lb_lp)
-    println("LB ILP: ", T.lb_lp)
-    println("UB ILP: ", T.ub_lp)  
-    println("UB ILP arcs: ", T.ub_lp_arcs)
+    println("Time LB LP: ", T.time_lb_lp)
+    println("LB LP: ", T.lb_lp)
+    println("UB LP: ", T.ub_lp)  
+    println("UB LP arcs: ", T.ub_lp_arcs)
+
+    println("Finished TriggerArcTSP_lb_lp ======== \n\n")
 end
 
 function TriggerArcTSP_ub_lp(T::TriggerArcTSP) 
+    println("===== Running TriggerArcTSP_ub_lp...")
+
     start_time = time()    
     model = Model(Gurobi.Optimizer)
     Build_TATSP_Base_Model(model, T)
@@ -433,19 +433,24 @@ function TriggerArcTSP_ub_lp(T::TriggerArcTSP)
         println("No feasible solution found in RINS search.")
     end        
 
-    println("Time LP: ", T.time_ub_lp)
+    println("Time UB LP: ", T.time_ub_lp)
     println("UB LP: ", T.ub_lp)  
     println("UB LP arcs: ", T.ub_lp_arcs)
     println("Fixed variables: ", T.ub_lp_fixed_vars)
+
+    println("Finished TriggerArcTSP_ub_lp ======== \n\n")
 end
 # --------------------------------------------------------------
 
-function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP, 
+function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP; 
                                  model = nothing,
                                  lambda::Vector{FloatType} = zeros(T.NTriggers), 
                                  gama::Dict{Tuple{IntType,IntType}, FloatType} = Dict{Tuple{IntType,IntType}, FloatType}(), 
                                  delta::Vector{FloatType} = zeros(T.NTriggers), 
-                                 mu::Vector{FloatType} = zeros(T.NTriggers))
+                                 mu::Vector{FloatType} = zeros(T.NTriggers),
+                                 print_running::Bool = false)
+    
+    if print_running println("===== Running TriggerArcTSP_lb_rlxlag...") end
 
     if model == nothing
         model = Model(Gurobi.Optimizer)    
@@ -486,12 +491,17 @@ function TriggerArcTSP_lb_rlxlag(T::TriggerArcTSP,
         T.time_lb_rlxlag = solve_time(model)
     end 
 
-    println("Final LB: $(T.lb_rlxlag)")
-    VerifyIfSolutionIsFeasible(T, T.lb_rlxlag, [value(model[:x_a][i]) for i in 1:T.NArcs])
+    println("Time UB rlxlab: $(T.time_lb_rlxlag )")
+    println("LB rlxlag: $(T.lb_rlxlag)")
+    # VerifyIfSolutionIsFeasible(T, T.lb_rlxlag, [value(model[:x_a][i]) for i in 1:T.NArcs])
+
+    if print_running println("Finished TriggerArcTSP_lb_rlxlag! ======== \n\n") end
     return T.lb_rlxlag
 end
 
-function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
+function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP, print_running::Bool = false)
+    if print_running println("===== Running TriggerArcTSP_ub_rlxlag...") end
+
     step_size = 0.001
     theta = step_size
     k = 1
@@ -528,7 +538,7 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     start_time = time()
 
     while (time() - start_time) < T.maxtime_ub_rlxlag
-        LB = TriggerArcTSP_lb_rlxlag(T, model, lambda, gama, delta, mu)
+        LB = TriggerArcTSP_lb_rlxlag(T; model=model, lambda=lambda, gama=gama, delta=delta, mu=mu)
 
         x_a = model[:x_a]
         y_a = model[:y_a]
@@ -591,13 +601,16 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
             gama[p] = max(0, gama[p] + theta * violations_R9[p])
         end
 
-        # Updates the step size using Polyak's rule        
+        # ========= Este bloco está comentado, porque acabou não sendo usado nos experimentos do relatório ========
+        # Updates the step size using Polyak's rule.       
         # violations = [violations_R6...;violations_R7...;violations_R8...;values(violations_R9)...]
         # norm_sq = sum(v^2 for v in violations)
         
         # if isfinite(LB) && isfinite(best_UB) && norm_sq > 1e-8
         #     theta = (step_size * (best_UB - LB)) / norm_sq
         # end
+        # =========
+
 
         k += 1
         # println("Elapsed time $(time() - start_time)")
@@ -607,31 +620,31 @@ function TriggerArcTSP_ub_rlxlag(T::TriggerArcTSP)
     T.ub_rlxlag = best_UB
     T.ub_rlxlag_arcs = arcs_best_UB
 
-    println("Time rlxlab: ", T.time_ub_rlxlag)
+    println("Time UB rlxlab: ", T.time_ub_rlxlag)
     println("UB rlxlab: ", T.ub_rlxlag)
     println("LB rlxlab: ", best_LB)
 
     # Plot_Bounds(T, lb_values, ub_values, iter_values)
+
+    if print_running println("Finished TriggerArcTSP_ub_rlxlag! ======== \n\n") end
 end
 # --------------------------------------------------------------
 
 function TriggerArcTSP_lb_colgen(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_lb_colgen
-    # lb_colgen
+    println("===== Running TriggerArcTSP_lb_colgen...")    
     println("The function TriggerArcTSP_lb_colgen is not implemented yet.")
+    println("Finished TriggerArcTSP_lb_colgen ======== \n\n")
 end
 
 function TriggerArcTSP_ub_colgen(T::TriggerArcTSP)
-    # This routine only changes the fields
-    # time_ub_colgen
-    # ub_colgen
-    # ub_colgen_arcs
+    println("===== Running TriggerArcTSP_ub_colgen...")    
     println("The function TriggerArcTSP_ub_colgen is not implemented yet.")
+    println("Finished TriggerArcTSP_ub_colgen ======== \n\n")
 end
 # --------------------------------------------------------------
 
 function TriggerArcTSP_ilp(T::TriggerArcTSP)
+    println("===== Running TriggerArcTSP_ilp...")
 
     active_constraints = Dict(
         "R1" => true,
@@ -788,8 +801,8 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
         gap = relative_gap(model)
         u = [value(u[i]) for i in 1:T.NNodes]
 
-        is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs)
-        println("Result of feasibility evaluation: $is_feasible")
+        # is_feasible = VerifyIfSolutionIsFeasible(T, T.ub_ilp, T.ub_ilp_arcs)
+        # println("Result of feasibility evaluation: $is_feasible")
     else
         println("No solution was found within time limit.")
         T.time_ilp = solve_time(model)
@@ -803,5 +816,7 @@ function TriggerArcTSP_ilp(T::TriggerArcTSP)
     println("UB ILP: ", T.ub_ilp)  
     println("UB ILP arcs: ", T.ub_ilp_arcs)
     println("Number of nodes: ", T.nn_ilp)
+
+    println("Finished TriggerArcTSP_ilp ======== \n\n")
 end
 # --------------------------------------------------------------

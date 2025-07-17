@@ -78,10 +78,10 @@ function main()
 
 	# print_instance(T)
 
-	TriggerArcTSP_lb_lp(T)
+	TriggerArcTSP_lb_lp(T,)
 	WriteLogFile(T,"lb_lp")
 	
-	TriggerArcTSP_lb_rlxlag(T)
+	TriggerArcTSP_lb_rlxlag(T; print_running=true)
 	WriteLogFile(T,"lb_rlxlag")
 	
 	TriggerArcTSP_lb_colgen(T)
@@ -90,7 +90,7 @@ function main()
 	TriggerArcTSP_ub_lp(T)
 	WriteLogFile(T,"ub_lp")
 
-	TriggerArcTSP_ub_rlxlag(T)
+	TriggerArcTSP_ub_rlxlag(T, true)
 	WriteLogFile(T,"ub_rlxlag")
 
 	TriggerArcTSP_ub_colgen(T)
